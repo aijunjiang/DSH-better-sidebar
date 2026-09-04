@@ -754,7 +754,7 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
     ctx.logger?.warn(`[dsh-better-sidebar] node-pty (${DSH_NODE_PTY_RANGE}) failed to load: ${detail}`)
   }
   const ptyManager = nodePty !== null
-    ? new PtyManager(terminalShell, resolved.terminalsPerSession, resolved.shellArgs, nodePty)
+    ? new PtyManager(terminalShell, resolved.terminalsPerSession, resolved.shellArgs, nodePty, ctx)
     : null
   // The agent-owned terminal registry: parallel to the UI-tab ptyManager,
   // keyed by uuid (the model's opaque handle) instead of `${sessionId}:${tabId}`,
@@ -1329,7 +1329,7 @@ async function attachTerminal(
     // Settings-page shell overrides win over the yaml/auto shell for
     // terminals opened from now on (existing pty handles keep their shell).
     const overrides = shellOverridesOf(getSettings)
-    const handle = ptyManager.open(sessionId, tabId, cwd, 80, 24, overrides.shell, overrides.shellArgs)
+    const handle = await ptyManager.open(sessionId, tabId, cwd, 80, 24, overrides.shell, overrides.shellArgs)
     // Windows pre-ready gate for the resize frames this socket may deliver
     // (see armPtyResizeGate; inert on POSIX).
     armPtyResizeGate(handle.pty)

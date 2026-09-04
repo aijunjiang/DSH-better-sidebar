@@ -77,7 +77,7 @@
     "typecheck": "tsc --noEmit",
     "bundle": "tsdown",
     "watch": "tsdown --watch",
-    "prepare": "tsdown",
+    "prepare": "tsc -p tsconfig.build.json && tsdown",
     "test": "vitest run",
     "test:mount": "bash scripts/e2e-mount.sh",
     "test:mount:aggregate": "bash scripts/e2e-aggregate-mount.sh",

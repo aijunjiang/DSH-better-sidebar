@@ -9,7 +9,9 @@
  */
 import { opendir, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import type { Context } from '@deepseek-ai/cordis'
 import { SidebarError } from './wire.ts'
+import { listRemoteDirectory, remoteSftp } from './remote-fs.ts'
 
 /** One explorer row. */
 export interface SidebarFsEntry {
@@ -38,12 +40,27 @@ export function compareEntries(a: SidebarFsEntry, b: SidebarFsEntry): number {
 
 /**
  * List one directory level.
- * @param path - absolute directory path.
+ * @param path - absolute directory path (a remote placeholder for SSH-routed sessions).
  * @param maxEntries - row bound of one level (extra rows flag `truncated`).
+ * @param ctx - cordis context; when the path names a remote route, the listing runs over SFTP.
  * @returns the sorted listing.
  * @throws {SidebarError} fs-error when the level is unreadable or not a directory.
  */
-export async function listDirectory(path: string, maxEntries = 1000): Promise<SidebarFsListing> {
+export async function listDirectory(path: string, maxEntries = 1000, ctx?: Context): Promise<SidebarFsListing> {
+  // Remote workspace: list over SFTP through remote-ssh's registry. The display
+  // paths stay placeholders so the tree/breadcrumbs/editor keep working.
+  if (ctx !== undefined) {
+    const remote = await remoteSftp(ctx, path)
+    if (remote !== null) {
+      try {
+        const { entries, truncated } = await listRemoteDirectory(remote.toDisplay, remote.sftp, remote.route.remotePath, maxEntries)
+        entries.sort(compareEntries)
+        return { path, entries, truncated }
+      } catch (error) {
+        throw new SidebarError('fs-error', `cannot list "${path}": ${messageOf(error)}`, 400)
+      }
+    }
+  }
   let level
   try {
     level = await opendir(path)

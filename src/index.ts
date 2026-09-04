@@ -30,6 +30,7 @@ import {
   type SidebarPrefs,
 } from './config.ts'
 import { parentOf, requireAbsolute, listDirectory, rootLabel } from './fs-tree.ts'
+import { parseRemoteRoute, readRemoteBytes, readRemoteText, writeRemoteText } from './remote-fs.ts'
 import { resolveSessionPath } from './session-path.ts'
 import { writeWorkspaceUpload } from './fs-operations.ts'
 import { ensureWorkspacePath, ensureWorkspaceWritePath } from './path-security.ts'
@@ -174,13 +175,21 @@ const READ_HEAD_LIMIT = 4096
 /** Text read of a file with the size cap; binary detection via NUL probe.
  *  Binary reads also return the first {@link READ_HEAD_LIMIT} bytes (base64)
  *  so the client can re-match viewers by content (`detect`). */
-async function readText(path: string, readLimit: number): Promise<{
+async function readText(path: string, readLimit: number, ctx?: Context): Promise<{
   content: string
   truncated: boolean
   binary: boolean
   size: number
   head?: string
 }> {
+  // Remote workspace: read over SFTP through remote-ssh's registry.
+  if (ctx !== undefined && parseRemoteRoute(path) !== null) {
+    try {
+      return await readRemoteText(ctx, path, readLimit)
+    } catch (error) {
+      throw new SidebarError('fs-error', `cannot read "${path}": ${error instanceof Error ? error.message : String(error)}`, 400)
+    }
+  }
   const info = await stat(path).catch((error: unknown) => {
     throw new SidebarError('fs-error', `cannot read "${path}": ${error instanceof Error ? error.message : String(error)}`, 400)
   })
@@ -332,7 +341,7 @@ function buildApi(
       const { cwd } = await cwdOf(payload)
       const record = payload as { path?: unknown }
       const target = record.path === undefined ? cwd : await ensureWorkspacePath(cwd, requireString(payload, 'path'), fenceEnabledOf(getSettings))
-      return listDirectory(target, resolved.listLimit)
+      return listDirectory(target, resolved.listLimit, ctx)
     },
     'fs.search': async (payload) => {
       // The editor side panel's global name search: rooted at the session
@@ -350,7 +359,7 @@ function buildApi(
       // cwd; thread it so the path resolves inside the authorized workspace.
       const selected = selectedRepoOf(payload)
       const path = await ensureWorkspacePath(cwd, await resolveGitPath(cwd, requireString(payload, 'path'), selected), fenceEnabledOf(getSettings))
-      const { content, truncated, binary, size, head } = await readText(path, resolved.readLimit)
+      const { content, truncated, binary, size, head } = await readText(path, resolved.readLimit, ctx)
       if (binary) return { kind: 'binary', size, truncated, head }
       return { kind: 'text', content, truncated }
     },
@@ -358,6 +367,15 @@ function buildApi(
       const { cwd } = await cwdOf(payload)
       const path = await ensureWorkspaceWritePath(cwd, requireString(payload, 'path'), fenceEnabledOf(getSettings))
       const content = requireString(payload, 'content')
+      // Remote workspace: write over SFTP (atomic on the remote).
+      if (parseRemoteRoute(path) !== null) {
+        try {
+          await writeRemoteText(ctx, path, content)
+          return { ok: true }
+        } catch (error) {
+          throw new SidebarError('fs-error', `cannot write "${path}": ${error instanceof Error ? error.message : String(error)}`, 400)
+        }
+      }
       const tmp = `${path}.dsh-sidebar-tmp-${process.pid}`
       try {
         await mkdir(dirname(path), { recursive: true })
@@ -930,11 +948,25 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         if (sessionId === null || raw === null) throw new SidebarError('bad-request', 'sessionId and path are required')
         const cwd = await sessionCwdOf(ctx, sessionId, url.searchParams.get('cwd') ?? undefined)
         const path = await ensureWorkspacePath(cwd, raw, fenceEnabledOf(() => settingsFace))
+        const type = mediaTypeForPath(path)
+        // Remote workspace: serve the bytes over SFTP.
+        if (parseRemoteRoute(path) !== null) {
+          const remote = await readRemoteBytes(ctx, path)
+          if (!remote.isFile || remote.size > resolved.mediaLimit) {
+            throw new SidebarError('fs-error', 'not a file or too large', 400)
+          }
+          const headers: Record<string, string> = { 'content-type': type, 'cache-control': 'no-cache' }
+          if (url.searchParams.get('download') === '1') {
+            headers['content-disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(basename(path))}`
+          }
+          res.writeHead(200, headers)
+          res.end(remote.data)
+          return
+        }
         const info = await stat(path)
         if (!info.isFile() || info.size > resolved.mediaLimit) {
           throw new SidebarError('fs-error', 'not a file or too large', 400)
         }
-        const type = mediaTypeForPath(path)
         const body = await readFile(path)
         // Raw bytes either way (binary-safe); ?download=1 switches the
         // disposition so the browser saves the file instead of showing it.
@@ -989,11 +1021,27 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         // fallback.
         const cwd = await sessionCwdOf(ctx, sessionId)
         const absolute = await ensureWorkspacePath(cwd, path, fenceEnabledOf(() => settingsFace))
+        const type = mediaTypeForPath(absolute)
+        // Remote workspace: serve the bytes over SFTP.
+        if (parseRemoteRoute(absolute) !== null) {
+          const remote = await readRemoteBytes(ctx, absolute)
+          if (!remote.isFile || remote.size > resolved.mediaLimit) {
+            throw new SidebarError('fs-error', 'not a file or too large', 400)
+          }
+          res.writeHead(200, {
+            'content-type': type === 'text/html' ? 'text/html; charset=utf-8' : type,
+            'cache-control': 'no-cache',
+            'x-content-type-options': 'nosniff',
+            'referrer-policy': 'no-referrer',
+            'content-security-policy': "sandbox allow-scripts allow-popups allow-downloads allow-modals; object-src 'none'",
+          })
+          res.end(remote.data)
+          return
+        }
         const info = await stat(absolute)
         if (!info.isFile() || info.size > resolved.mediaLimit) {
           throw new SidebarError('fs-error', 'not a file or too large', 400)
         }
-        const type = mediaTypeForPath(absolute)
         const body = await readFile(absolute)
         res.writeHead(200, {
           'content-type': type === 'text/html' ? 'text/html; charset=utf-8' : type,

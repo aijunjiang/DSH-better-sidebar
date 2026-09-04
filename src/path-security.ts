@@ -2,6 +2,7 @@
 import { realpath } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { isWithin, requireAbsolute } from './fs-tree.ts'
+import { parseRemoteRoute } from './remote-fs.ts'
 import { resolveSessionPath } from './session-path.ts'
 import { SidebarError } from './wire.ts'
 
@@ -22,6 +23,16 @@ function assertWithinWorkspace(workspace: string, target: string): void {
 }
 
 /**
+ * Whether either end names an SSH-routed workspace (a remote placeholder or an
+ * `ssh://` URL). Remote files live on the SSH host, so `realpath` — which fails
+ * on every non-existent remote child — must not run; containment is checked
+ * lexically instead.
+ */
+function isRemoteWorkspace(...paths: string[]): boolean {
+  return paths.some((path) => parseRemoteRoute(path) !== null)
+}
+
+/**
  * Resolve an existing workspace path through symlinks and (unless disarmed)
  * enforce containment.
  *
@@ -34,6 +45,13 @@ function assertWithinWorkspace(workspace: string, target: string): void {
  */
 export async function ensureWorkspacePath(cwd: string, target: string, fence = true): Promise<string> {
   const absolute = requireAbsolute(resolveSessionPath(cwd, target))
+  // Remote workspace: the bytes live over SFTP, so `realpath` would fail on
+  // every child that only exists remotely. Containment is a lexical prefix
+  // check on the placeholder/URL spelling, and the path is returned unchanged.
+  if (isRemoteWorkspace(cwd, absolute)) {
+    if (fence) assertWithinWorkspace(cwd, absolute)
+    return absolute
+  }
   const [realCwd, realTarget] = await Promise.all([
     resolveRealPath(cwd, 'workspace'),
     resolveRealPath(absolute, 'target'),
@@ -57,6 +75,12 @@ export async function ensureWorkspacePath(cwd: string, target: string, fence = t
  */
 export async function ensureWorkspaceWritePath(cwd: string, target: string, fence = true): Promise<string> {
   const absolute = requireAbsolute(resolveSessionPath(cwd, target))
+  // Remote workspace: skip realpath (see ensureWorkspacePath) — the destination
+  // lives on the SSH host and is canonicalized lexically only.
+  if (isRemoteWorkspace(cwd, absolute)) {
+    if (fence) assertWithinWorkspace(cwd, absolute)
+    return absolute
+  }
   const realCwd = await resolveRealPath(cwd, 'workspace')
   let existingPath = absolute
   const missingSegments: string[] = []

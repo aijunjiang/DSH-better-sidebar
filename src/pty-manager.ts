@@ -10,8 +10,10 @@ import { chmodSync, existsSync } from 'node:fs'
 import { dirname, join, win32 as win32Path } from 'node:path'
 import { createRequire } from 'node:module'
 import { userInfo } from 'node:os'
-import type { IPty } from 'node-pty'
+import type { Context } from '@deepseek-ai/cordis'
 import { loadRequiredNodePty, type NodePtyModule } from './pty-deps.ts'
+import { parseRemoteRoute } from './remote-fs.ts'
+import { spawnRemoteShell, type SidebarPtyStream } from './remote-pty.ts'
 import { SidebarError } from './wire.ts'
 
 /** Per-terminal transcript bound (bytes kept for replay). */
@@ -53,7 +55,7 @@ export interface SidebarPty {
    *  the page-load hydrate race can attach the real cwd after the first
    *  connect, and a shell in the wrong directory must not linger). */
   cwd: string
-  pty: IPty
+  pty: SidebarPtyStream
   /** Output accumulated since spawn (bounded; head dropped when over the limit). */
   transcript: string
   /** Whether the top-level process exited (transcript stays replayable). */
@@ -97,6 +99,8 @@ export class PtyManager {
     private readonly shellArgs: string[] = [],
     /** The loaded node-pty module (injected so a broken install degrades instead of crashing the plugin). */
     private readonly nodePty: NodePtyModule = loadRequiredNodePty(),
+    /** Cordis context — reads remote-ssh's sshRegistry to open remote shells. */
+    private readonly ctx?: Context,
   ) {}
 
   /** All live terminal keys of one session. */
@@ -126,7 +130,7 @@ export class PtyManager {
    * @returns the live handle.
    * @throws {SidebarError} pty-error when the per-session cap is reached.
    */
-  open(
+  async open(
     sessionId: string,
     tabId: string,
     cwd: string,
@@ -134,7 +138,7 @@ export class PtyManager {
     rows: number,
     shell?: string,
     shellArgs?: string[],
-  ): SidebarPty {
+  ): Promise<SidebarPty> {
     const key = `${sessionId}:${tabId}`
     this.cancelClose(key)
     const existing = this.sessions.get(key)
@@ -148,19 +152,29 @@ export class PtyManager {
     if (this.keysOf(sessionId).length >= this.maxPerSession) {
       throw new SidebarError('pty-error', `terminal limit reached (${this.maxPerSession}) for this session`, 400)
     }
-    const executable = resolveShellExecutable(shell ?? this.shell)
-    const handle: SidebarPty = {
-      key,
-      sessionId,
-      tabId,
-      cwd,
-      pty: this.nodePty.spawn(executable, shellSpawnArgs(shellArgs ?? this.shellArgs), {
+    // Remote workspace: open a shell on the SSH host via remote-ssh's shared
+    // connection (no node-pty involved — the shell runs over the multiplexed
+    // channel in the remote workspace directory).
+    let stream: SidebarPtyStream
+    if (parseRemoteRoute(cwd) !== null) {
+      if (this.ctx === undefined) throw new SidebarError('pty-error', 'remote terminal requires the host context', 400)
+      stream = await spawnRemoteShell(this.ctx, cwd, cols, rows, shell ?? '/bin/bash', shellArgs ?? ['-l'])
+    } else {
+      const executable = resolveShellExecutable(shell ?? this.shell)
+      stream = this.nodePty.spawn(executable, shellSpawnArgs(shellArgs ?? this.shellArgs), {
         name: 'xterm-256color',
         cols: Math.max(2, Math.floor(cols)),
         rows: Math.max(2, Math.floor(rows)),
         cwd,
         env: { ...process.env },
-      }),
+      })
+    }
+    const handle: SidebarPty = {
+      key,
+      sessionId,
+      tabId,
+      cwd,
+      pty: stream,
       transcript: '',
       exited: false,
     }

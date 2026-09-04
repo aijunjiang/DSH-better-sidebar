@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto'
 import type { IPty } from 'node-pty'
 import { ensureSpawnHelper, resolveShellExecutable, shellSpawnArgs } from './pty-manager.ts'
 import { loadRequiredNodePty, type NodePtyModule } from './pty-deps.ts'
+import type { SidebarPtyStream } from './remote-pty.ts'
 import { SidebarError } from './wire.ts'
 
 /** Per-agent-terminal transcript bound (bytes kept for replay and reads). */
@@ -67,7 +68,7 @@ const ptyResizeGates = new WeakMap<object, ResizeGateState>()
  * Arm the Windows pre-ready resize gate for one freshly spawned pty.
  * No-op on POSIX and for injected ptys without `onData`.
  */
-export function armPtyResizeGate(pty: IPty): void {
+export function armPtyResizeGate(pty: SidebarPtyStream): void {
   if (process.platform !== 'win32') return
   if (typeof pty.onData !== 'function' || ptyResizeGates.has(pty)) return
   const state: ResizeGateState = { sawData: false }
@@ -94,7 +95,7 @@ export function armPtyResizeGate(pty: IPty): void {
  * the first output — the Windows pre-ready window).
  */
 export function tryResizePty(
-  pty: Pick<IPty, 'resize'>,
+  pty: Pick<SidebarPtyStream, 'resize'>,
   cols: number,
   rows: number,
 ): boolean {

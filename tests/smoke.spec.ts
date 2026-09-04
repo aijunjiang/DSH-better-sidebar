@@ -208,14 +208,14 @@ describe('host plugin smoke', () => {
   it('pty manager releases the quota on close and respawns after exit', async () => {
     const manager = new PtyManager(defaultShell(), 3)
     try {
-      const first = manager.open('s1', 't1', process.cwd(), 80, 24)
+      const first = await manager.open('s1', 't1', process.cwd(), 80, 24)
       expect(manager.keysOf('s1')).toHaveLength(1)
       // Tab-close semantics (close frame): quota released immediately.
       manager.scheduleClose(first.key, 0)
       await new Promise(resolve => setTimeout(resolve, 50))
       expect(manager.keysOf('s1')).toHaveLength(0)
       // Reopen spawns a fresh process.
-      const second = manager.open('s1', 't1', process.cwd(), 80, 24)
+      const second = await manager.open('s1', 't1', process.cwd(), 80, 24)
       expect(second).not.toBe(first)
       expect(manager.keysOf('s1')).toHaveLength(1)
       // After the shell exits, a reconnect respawns instead of reusing the dead handle.
@@ -225,7 +225,7 @@ describe('host plugin smoke', () => {
         await new Promise(resolve => setTimeout(resolve, 100))
       }
       expect(second.exited).toBe(true)
-      const third = manager.open('s1', 't1', process.cwd(), 80, 24)
+      const third = await manager.open('s1', 't1', process.cwd(), 80, 24)
       expect(third.exited).toBe(false)
       expect(third).not.toBe(second)
     } finally {
@@ -236,7 +236,7 @@ describe('host plugin smoke', () => {
   it('pty manager: exited zombie handles do not consume the quota', async () => {
     const manager = new PtyManager(defaultShell(), 1)
     try {
-      const first = manager.open('s3', 't1', process.cwd(), 80, 24)
+      const first = await manager.open('s3', 't1', process.cwd(), 80, 24)
       first.pty.write('exit\r')
       const deadline = Date.now() + 5000
       while (!first.exited && Date.now() < deadline) {
@@ -244,7 +244,7 @@ describe('host plugin smoke', () => {
       }
       expect(first.exited).toBe(true)
       // Quota is 1; the exited handle is swept, so a NEW tab can still spawn.
-      const second = manager.open('s3', 't2', process.cwd(), 80, 24)
+      const second = await manager.open('s3', 't2', process.cwd(), 80, 24)
       expect(second.exited).toBe(false)
       expect(manager.keysOf('s3')).toHaveLength(1)
     } finally {
@@ -255,9 +255,9 @@ describe('host plugin smoke', () => {
   it('pty manager: a reconnect within the grace period cancels the pending close', async () => {
     const manager = new PtyManager(defaultShell(), 3)
     try {
-      const handle = manager.open('s2', 't1', process.cwd(), 80, 24)
+      const handle = await manager.open('s2', 't1', process.cwd(), 80, 24)
       manager.scheduleClose(handle.key, 200)
-      manager.open('s2', 't1', process.cwd(), 80, 24)
+      await manager.open('s2', 't1', process.cwd(), 80, 24)
       await new Promise(resolve => setTimeout(resolve, 400))
       expect(manager.get(handle.key)).toBeDefined()
     } finally {
@@ -268,7 +268,7 @@ describe('host plugin smoke', () => {
   it('pty manager: a parked pty survives past the reconnect grace (session switch)', async () => {
     const manager = new PtyManager(defaultShell(), 3)
     try {
-      const handle = manager.open('s2', 't1', process.cwd(), 80, 24)
+      const handle = await manager.open('s2', 't1', process.cwd(), 80, 24)
       manager.park(handle.key)
       expect(manager.isParked(handle.key)).toBe(true)
       // A parked pty does NOT enter the grace countdown — it stays alive
@@ -281,15 +281,15 @@ describe('host plugin smoke', () => {
     }
   })
 
-  it('pty manager: a reconnecting view clears the parked state (switch back)', () => {
+  it('pty manager: a reconnecting view clears the parked state (switch back)', async () => {
     const manager = new PtyManager(defaultShell(), 3)
     try {
-      const handle = manager.open('s2', 't1', process.cwd(), 80, 24)
+      const handle = await manager.open('s2', 't1', process.cwd(), 80, 24)
       manager.park(handle.key)
       expect(manager.isParked(handle.key)).toBe(true)
       // open() calls cancelClose(), which clears the parked state — the
       // user switched back to the session and the view reattached.
-      manager.open('s2', 't1', process.cwd(), 80, 24)
+      await manager.open('s2', 't1', process.cwd(), 80, 24)
       expect(manager.isParked(handle.key)).toBe(false)
       expect(manager.get(handle.key)).toBeDefined()
     } finally {
@@ -300,7 +300,7 @@ describe('host plugin smoke', () => {
   it('pty manager: an explicit close frame on a parked pty still kills it', async () => {
     const manager = new PtyManager(defaultShell(), 3)
     try {
-      const handle = manager.open('s2', 't1', process.cwd(), 80, 24)
+      const handle = await manager.open('s2', 't1', process.cwd(), 80, 24)
       manager.park(handle.key)
       // The user switched back and closed the tab — scheduleClose (the
       // close-frame handler) clears the parked state and kills the pty.
@@ -325,15 +325,15 @@ describe('host plugin smoke', () => {
     // does not exist on Windows).
     const other = tmpdir()
     try {
-      const first = manager.open('s4', 't1', process.cwd(), 80, 24)
+      const first = await manager.open('s4', 't1', process.cwd(), 80, 24)
       // The hydrate race: the first connect fell back to the process cwd,
       // the reconnect carries the session's real cwd — the shell must move.
-      const second = manager.open('s4', 't1', other, 80, 24)
+      const second = await manager.open('s4', 't1', other, 80, 24)
       expect(second).not.toBe(first)
       expect(second.cwd).toBe(other)
       expect(manager.keysOf('s4')).toHaveLength(1)
       // A same-cwd reconnect reattaches without respawning.
-      const third = manager.open('s4', 't1', other, 80, 24)
+      const third = await manager.open('s4', 't1', other, 80, 24)
       expect(third).toBe(second)
       expect(manager.keysOf('s4')).toHaveLength(1)
     } finally {
@@ -353,7 +353,7 @@ describe('host plugin smoke', () => {
       process.env.HOME = home
       const manager = new PtyManager('/bin/bash', 3)
       try {
-        handle = manager.open('s5', 't1', process.cwd(), 80, 24)
+        handle = await manager.open('s5', 't1', process.cwd(), 80, 24)
         handle.pty.write('echo $DSH_LOGIN_MARKER\r')
         const deadline = Date.now() + 5000
         while (!handle.transcript.includes('loaded-from-profile') && Date.now() < deadline) {

@@ -18,9 +18,15 @@
  * @module dsh-better-sidebar/remote-fs
  */
 
-import { posix } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { once } from 'node:events'
+import { createWriteStream } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, posix } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SidebarFsEntry } from './fs-tree.ts'
+import { SidebarError } from './wire.ts'
 
 /** One parsed remote route. */
 export interface RemoteRoute {
@@ -36,6 +42,9 @@ export interface SftpLike {
   stat(path: string, cb: (err: Error | null, stats: SftpAttrsLike) => void): void
   lstat(path: string, cb: (err: Error | null, stats: SftpAttrsLike) => void): void
   mkdir(path: string, cb: (err: Error | null) => void): void
+  rename(oldPath: string, newPath: string, cb: (err: Error | null) => void): void
+  unlink(path: string, cb: (err: Error | null) => void): void
+  fastPut(localPath: string, remotePath: string, cb: (err: Error | null) => void): void
 }
 
 /** ssh2 `Stats` subset used here. */
@@ -160,6 +169,93 @@ function sftpMkdir(sftp: SftpLike, path: string): Promise<void> {
   })
 }
 
+/** Promise wrapper for SFTP rename. */
+function sftpRename(sftp: SftpLike, oldPath: string, newPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    sftp.rename(oldPath, newPath, (error) => {
+      if (error !== undefined) reject(error)
+      else resolve()
+    })
+  })
+}
+
+/** Promise wrapper for SFTP unlink. */
+function sftpUnlink(sftp: SftpLike, path: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    sftp.unlink(path, (error) => {
+      if (error !== undefined) reject(error)
+      else resolve()
+    })
+  })
+}
+
+/** Promise wrapper for SFTP fastPut (pipelined local→remote bulk upload). */
+function sftpFastPut(sftp: SftpLike, localPath: string, remotePath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    sftp.fastPut(localPath, remotePath, (error) => {
+      if (error !== undefined) reject(error)
+      else resolve()
+    })
+  })
+}
+
+/**
+ * Recursively create a remote directory, treating an already-existing
+ * directory as success. SFTP `mkdir` is non-recursive and reports a failure
+ * (not `EEXIST`) for existing paths, so each level is created then verified
+ * with `stat` when creation fails.
+ */
+async function ensureRemoteDirs(sftp: SftpLike, dir: string): Promise<void> {
+  if (dir === '' || dir === '/' || dir === '.') return
+  const parts = dir.split('/').filter(Boolean)
+  let current = dir.startsWith('/') ? '' : '.'
+  for (const part of parts) {
+    current = current === '' ? `/${part}` : current === '.' ? part : `${current}/${part}`
+    try {
+      await sftpMkdir(sftp, current)
+    } catch (error) {
+      try {
+        const stats = await sftpStat(sftp, current)
+        if (!stats.isDirectory()) throw error
+      } catch {
+        throw error
+      }
+    }
+  }
+}
+
+/**
+ * Stream `chunks` into a local staging file, bounded by `limit`, mirroring the
+ * local upload path's chunked write (never buffers a whole file in memory, so
+ * multi-gigabyte uploads stay bounded). Returns the written byte count.
+ */
+async function stageLocalUpload(chunks: AsyncIterable<string | Uint8Array>, target: string, limit: number): Promise<number> {
+  const stream = createWriteStream(target, { flags: 'wx' })
+  const closed = new Promise<void>((resolve) => { stream.once('close', () => resolve()) })
+  let size = 0
+  let streamError: unknown
+  stream.on('error', (error) => { streamError = error })
+  try {
+    for await (const chunk of chunks) {
+      const buffer = Buffer.from(chunk)
+      size += buffer.length
+      if (size > limit) throw new SidebarError('too-large', `upload exceeds the ${limit} byte limit`, 413)
+      if (!stream.write(buffer)) await once(stream, 'drain')
+      if (streamError !== undefined) throw streamError
+    }
+    await new Promise<void>((resolve, reject) => {
+      stream.end((error?: Error | null) => (error === undefined || error === null ? resolve() : reject(error)))
+    })
+    if (streamError !== undefined) throw streamError
+    return size
+  } catch (error) {
+    stream.destroy()
+    await closed.catch(() => {})
+    await rm(target, { force: true }).catch(() => {})
+    throw error
+  }
+}
+
 /** List one remote directory level as explorer rows (display paths stay placeholders). */
 export async function listRemoteDirectory(toDisplay: (remote: string) => string, sftp: SftpLike, remotePath: string, maxEntries = 1000): Promise<{ entries: SidebarFsEntry[]; truncated: boolean }> {
   const listed = await sftpReaddir(sftp, remotePath)
@@ -252,4 +348,42 @@ export async function mkdirRemote(ctx: Context, path: string): Promise<void> {
   const resolved = await remoteSftp(ctx, path)
   if (resolved === null) throw new Error(`dsh-better-sidebar: remote path not resolvable: ${path}`)
   await sftpMkdir(resolved.sftp, resolved.route.remotePath)
+}
+
+/**
+ * Upload `chunks` into a remote (SFTP) workspace target atomically. The bytes
+ * are first streamed to a local staging file (bounded chunks, so GB-scale
+ * uploads never buffer a whole file in memory), then pushed to the remote with
+ * `fastPut` (ssh2's pipelined bulk transfer) into a temp sibling and renamed
+ * over the target. Parent directories are created on demand. The display path
+ * stays a placeholder for the client, while the bytes land on the SSH host.
+ *
+ * @throws SidebarError with a wire code for shape, size, and SFTP failures;
+ * the staging file and remote temp file are always removed on failure.
+ */
+export async function writeRemoteUpload(
+  ctx: Context,
+  target: string,
+  chunks: AsyncIterable<string | Uint8Array>,
+  limit: number,
+): Promise<{ path: string; size: number }> {
+  const resolved = await remoteSftp(ctx, target)
+  if (resolved === null) throw new SidebarError('fs-error', `cannot upload to remote path: ${target}`, 400)
+  const { sftp, route } = resolved
+  const remoteTarget = route.remotePath
+  await ensureRemoteDirs(sftp, posix.dirname(remoteTarget))
+  const remoteTmp = `${remoteTarget}.dsh-upload-${randomUUID()}.tmp`
+  const stageDir = await mkdtemp(join(tmpdir(), 'dsh-sidebar-upload-'))
+  const stagePath = join(stageDir, 'upload.bin')
+  try {
+    const size = await stageLocalUpload(chunks, stagePath, limit)
+    await sftpFastPut(sftp, stagePath, remoteTmp)
+    await sftpRename(sftp, remoteTmp, remoteTarget)
+    return { path: target, size }
+  } catch (error) {
+    await sftpUnlink(sftp, remoteTmp).catch(() => {})
+    throw error
+  } finally {
+    await rm(stageDir, { recursive: true, force: true }).catch(() => {})
+  }
 }

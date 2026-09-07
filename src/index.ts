@@ -953,6 +953,7 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
           chunks: req,
           limit: resolved.uploadLimit,
           fence: fenceEnabledOf(() => settingsFace),
+          ctx,
         })
         writeOk(res, { path, size })
       } catch (error) {

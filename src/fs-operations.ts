@@ -15,8 +15,10 @@ import { once } from 'node:events'
 import { createWriteStream } from 'node:fs'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import type { Context } from '@deepseek-ai/cordis'
 import { requireAbsolute } from './fs-tree.ts'
 import { ensureWorkspacePath, ensureWorkspaceWritePath } from './path-security.ts'
+import { parseRemoteRoute, writeRemoteUpload } from './remote-fs.ts'
 import { SidebarError } from './wire.ts'
 
 /** Inputs of one upload: the session scope plus the request body stream. */
@@ -33,6 +35,8 @@ export interface WorkspaceUploadInput {
   limit: number
   /** Whether workspace containment is enforced (the `workspaceFence` setting; on by default). */
   fence?: boolean
+  /** Plugin context, required to resolve the SFTP bridge for remote workspaces. */
+  ctx?: Context
 }
 
 /**
@@ -47,7 +51,7 @@ export interface WorkspaceUploadInput {
  * failures; the temp file is always removed on failure.
  */
 export async function writeWorkspaceUpload(input: WorkspaceUploadInput): Promise<{ path: string; size: number }> {
-  const { cwd, dir, relativePath, chunks, limit, fence = true } = input
+  const { cwd, dir, relativePath, chunks, limit, fence = true, ctx } = input
   const base = requireAbsolute(dir)
   await ensureWorkspacePath(cwd, base, fence)
   if (relativePath === '' || relativePath.startsWith('/') || relativePath.startsWith('\\')) {
@@ -59,6 +63,11 @@ export async function writeWorkspaceUpload(input: WorkspaceUploadInput): Promise
   }
   const target = join(base, ...segments)
   const safeTarget = await ensureWorkspaceWritePath(cwd, target, fence)
+  // Remote workspace: stream over SFTP so bytes land on the SSH host, not in
+  // the local placeholder directory (which exists only to keep paths valid).
+  if (ctx !== undefined && parseRemoteRoute(safeTarget) !== null) {
+    return writeRemoteUpload(ctx, safeTarget, chunks, limit)
+  }
   const tmp = join(dirname(safeTarget), `.${basename(safeTarget)}.dsh-upload-${randomUUID()}.tmp`)
   await mkdir(dirname(safeTarget), { recursive: true })
   const stream = createWriteStream(tmp, { flags: 'wx' })

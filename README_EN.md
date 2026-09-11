@@ -96,102 +96,136 @@ browser (local)                    remote host
 
 ## 🚀 Installation
 
-**Prerequisites**: DSH installed (`dsh web` boots), Node.js ≥ 20, pnpm ≥ 10.
+**This is a fork — install from this repository (git source), not from the
+`dsh-better-sidebar` package on npm.** That npm package is the upstream official
+build and does **not** contain this fork's remote-SSH capability.
 
-**Supported DSH versions**:
-<a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="Supported DSH versions (v0.19.0): 0.1.5-rc.1+" src="https://img.shields.io/badge/DSH-0.1.5--rc.1%2B-4d6bfe" /></a>
+**Prereqs**: a working DSH (`dsh web` runs), Node.js ≥ 20, pnpm ≥ 10, DSH **0.1.5-rc.1+**.
 
-> 📌 **Stable release**: starting with `v0.19.0` the plugin targets DSH **0.1.5-rc.1+** (npm dist-tag `latest`). Hosts still on DSH 0.1.5-alpha.2 should stay pinned to `dsh-better-sidebar@0.19.0-alpha.1`; the 0.1.2-rc.1 stable line keeps using `dsh-better-sidebar@0.18.x`; DSH ≤ 0.1.1-rc.2 should use `dsh-better-sidebar@0.17.1`.
+### Step 1 · Install remote-ssh (the remote connection capability)
 
 ```sh
-dsh plugin --profile web add dsh-better-sidebar@latest   # first run fails: pnpm 11 blocks node-pty build scripts (the dependency is still written)
-cd ~/.dsh/profiles/web && pnpm approve-builds --all      # allow the build scripts (re-runs the install automatically)
-dsh plugin --profile web add dsh-better-sidebar@latest   # re-run succeeds
+dsh plugin --profile web add github:aijunjiang/dsh-remote-ssh
 ```
 
-Then **hard-refresh the browser** (Cmd/Ctrl+Shift+R) to see the sidebar (DSH hot-reloads client changes; only host-half updates need a restart).
+The first run fails because pnpm 11 blocks the `ssh2` / `cpu-features` native
+build scripts — expected:
 
-**Or let DSH install it for you** — paste this prompt into any DSH session:
+```sh
+cd ~/.dsh/profiles/web
+# edit pnpm-workspace.yaml, replacing the placeholders under allowBuilds with:
+#   cpu-features: true
+#   ssh2: true
+pnpm install
+dsh plugin --profile web add github:aijunjiang/dsh-remote-ssh   # re-run to finish
+```
+
+### Step 2 · Install this fork
+
+```sh
+dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar
+```
+
+A git source's `prepare` script is gated differently from npm's, so
+**`pnpm approve-builds --all` does not apply**. The first run reports:
+
+```
+[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... not in the "allowBuilds" allowlist.
+Add the package to "allowBuilds" ... For example:
+allowBuilds:
+  dsh-better-sidebar@https://codeload.github.com/aijunjiang/DSH-better-sidebar/tar.gz/<commit>: true
+```
+
+You **must** put that **full URL key** (with the commit hash — a bare package
+name does not work) plus `node-pty` under `allowBuilds` in
+`~/.dsh/profiles/web/pnpm-workspace.yaml`, then re-run:
+
+```sh
+cd ~/.dsh/profiles/web
+# edit pnpm-workspace.yaml, under allowBuilds (replace <commit> with the reported one):
+#   node-pty: true
+#   dsh-better-sidebar@https://codeload.github.com/aijunjiang/DSH-better-sidebar/tar.gz/<commit>: true
+pnpm install
+dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar   # re-run to finish
+```
+
+> ⚠️ The commit hash changes on every push: each time this repo's `main` moves,
+> the old key stops matching — take the new hash from the fresh error.
+
+Then **hard-refresh the browser** (Cmd/Ctrl+Shift+R) to see the sidebar (DSH
+hot-reloads client changes; only a host-half update needs a restart).
+
+### Let DSH install it for you
+
+Send this prompt to any DSH session:
 
 ```text
-Install the dsh-better-sidebar plugin (a sidebar workbench for DSH):
-1. Run: dsh plugin --profile web add dsh-better-sidebar@latest (the first run fails because pnpm 11 blocks node-pty build scripts — that's expected)
-2. In ~/.dsh/profiles/web run: pnpm approve-builds --all (allows the build scripts and re-runs the install)
-3. Run the add command again: dsh plugin --profile web add dsh-better-sidebar@latest
-4. When done, remind me to hard-refresh the browser (Cmd/Ctrl+Shift+R)
-If anything fails, check the troubleshooting table in the README at https://github.com/omdsh-dev/DSH-better-sidebar
+Install dsh-better-sidebar (my fork with remote-SSH support), step by step:
+1. Install remote-ssh first: dsh plugin --profile web add github:aijunjiang/dsh-remote-ssh
+   (the first run fails with ERR_PNPM_IGNORED_BUILDS for cpu-features/ssh2 — expected)
+2. Edit ~/.dsh/profiles/web/pnpm-workspace.yaml: set cpu-features and ssh2 to true under
+   allowBuilds, run pnpm install there, then re-run the command from step 1
+3. Install the plugin: dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar
+   (the first run fails with ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED — expected)
+4. Take the full allowBuilds key from step 3's error
+   (dsh-better-sidebar@https://codeload.github.com/aijunjiang/DSH-better-sidebar/tar.gz/<commit>)
+   and write it into ~/.dsh/profiles/web/pnpm-workspace.yaml under allowBuilds, together with:
+     node-pty: true
+5. Run pnpm install in ~/.dsh/profiles/web, then re-run the command from step 3
+6. Finish by telling me to hard-refresh the browser (Cmd/Ctrl+Shift+R)
 ```
-
-**Option 3: one-shot script** — from a clone of this repo, run `bash scripts/install.sh` (macOS / Linux / Windows Git Bash; native Windows uses `install.ps1`; `-h` for options) — it automates add → approve-builds → re-run.
 
 <details>
 <summary><b>Updating</b></summary>
 
 ```sh
-dsh plugin --profile web add dsh-better-sidebar@latest
+# git source: re-running add pulls the latest main (after a new commit, re-approve allowBuilds as above)
+dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar
+dsh plugin --profile web add github:aijunjiang/dsh-remote-ssh
 ```
 
-or bump the version in `~/.dsh/profiles/web/package.json` (e.g. `"^0.16.1"`) and run `pnpm install`. Then hard-refresh the browser (Cmd/Ctrl+Shift+R) — client changes do not need a DSH restart.
+Then **hard-refresh the browser** (Cmd/Ctrl+Shift+R) — no DSH restart needed for client changes.
 
 </details>
 
 <details>
 <summary><b>Troubleshooting</b></summary>
 
-| Symptom | Cause & fix |
+| Symptom | Cause and fix |
 |---|---|
-| `Ignored build scripts` | pnpm 11 blocked build scripts. Run `pnpm approve-builds --all` in the profile directory (`~/.dsh/profiles/web`). |
-| `minimum release age` / version `< 24h` | The release is younger than 24 hours. Wait, or re-run once (pnpm auto-adds `minimumReleaseAgeExclude`). |
+| `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` | The git source's `prepare` script is not approved. Put the **full URL key** from the error (with the commit hash, not a bare name) under `allowBuilds` in `pnpm-workspace.yaml`, then re-run. |
+| `Ignored build scripts` (ssh2 / cpu-features) | pnpm 11 blocked native builds. In `~/.dsh/profiles/web`, set the matching `allowBuilds` entries to `true` and run `pnpm install`. |
+| Installed, but **no remote-SSH capability** | You installed the npm package (`dsh-better-sidebar@latest`) instead of this fork. Install via `github:aijunjiang/DSH-better-sidebar` and install `dsh-remote-ssh` alongside it. |
 | "profile directory not found" | Run `dsh web` once so it initializes `~/.dsh/profiles/web`. |
-| Two sidebars on the page | Double-mount. Old hand-written line: `~/.dsh/profiles/web/cordis.patch.yml` still has `- insert: ... better-sidebar ...` — delete it (a same-id duplicate mount makes the loader fail loudly with `duplicate loader entry id`). When an aggregate bundle (e.g. `@linxin666/dsh-web-ui-all`) mounts this package under a **different** id, the plugin's own bundle patch backs off automatically since 0.13.x (it detects an already-enabled mount of the same package name and does not mount itself) — no manual fix needed; if it still double-mounts, make sure the aggregate bundle precedes `dsh-better-sidebar` in `dsh.profile.bundles`. |
-| Terminal fails on Windows | `node-pty` relies on prebuilt binaries; if none match your Node version, install a build toolchain (VS Build Tools). Mainstream Node versions are usually covered. |
-| Terminal shows "node-pty failed to load" | The `node-pty` install is missing or broken (e.g. pnpm skipped its build script). The terminal banner shows a repair command — copy it into a terminal/cmd on the DSH machine and run it (in `~/.dsh/profiles/web`: `pnpm approve-builds --all && pnpm rebuild node-pty`), then restart DSH and click Retry. The plugin and DSH core share the same `node-pty@^1.1.0`, so the repair restores both. |
-| `dsh: command not found` | Install DSH first, or run `npx -y --package @deepseek-ai/dsh dsh plugin --profile web add dsh-better-sidebar@latest`. |
+| **Two sidebars** appear | Double mount. A leftover manual mount line in `~/.dsh/profiles/web/cordis.patch.yml` still inserts `better-sidebar` — remove it (duplicate ids make the loader fail with `duplicate loader entry id`). When an aggregate bundle (e.g. `@linxin666/dsh-web-ui-all`) mounts this package under a **different id**, the plugin's own bundle patch steps aside since 0.13.x; if it still double-mounts, put the aggregate bundle before `dsh-better-sidebar` in the bundle order. |
+| Terminal unusable on Windows | `node-pty` needs prebuilt binaries; a Node version without them requires a toolchain (VS Build Tools). Mainstream versions ship prebuilds. |
+| "node-pty failed to load" in the terminal | `node-pty` is missing or broken (e.g. its build script was blocked). The terminal banner prints the fix: in `~/.dsh/profiles/web` run `pnpm approve-builds --all && pnpm rebuild node-pty`, then restart DSH and retry. The plugin and DSH core share the same `node-pty@^1.1.0`. |
+| File tree / terminal still local | `dsh-remote-ssh` is not installed or not mounted. Install it and restart DSH; the session workspace must be an SSH route (`ssh://<id>/<path>` or its local placeholder). |
+| `dsh: command not found` | Install DSH first; or run `npx -y --package @deepseek-ai/dsh dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar`. |
 
 </details>
 
 <details>
-<summary><b>Install from source / develop (optional — alternative to the npm flow)</b></summary>
+<summary><b>Install from source / develop (optional)</b></summary>
 
-To debug local changes or track the dev branch, point the dependency at a local clone and build it yourself:
-
-```text
-1. git clone https://github.com/omdsh-dev/DSH-better-sidebar.git ~/Code/DSH-better-sidebar
-   cd ~/Code/DSH-better-sidebar && pnpm install && pnpm build
-2. In ~/.dsh/profiles/web/package.json dependencies write "dsh-better-sidebar": "link:<absolute path of the clone>"
-3. Append this mount line to ~/.dsh/profiles/web/cordis.patch.yml (to pick the terminal shell, add `config.shell`; `config.shellArgs` starts it with explicit args — when non-empty they replace the default `-l`. When omitted the host resolves `$SHELL` / the login shell / powershell.exe):
-   - insert:
-       - id: better-sidebar
-         name: 'dsh-better-sidebar'
-         config:
-           shell: /bin/zsh
-           shellArgs:
-             - --noprofile
-             - --no-rc
-4. Run pnpm install in ~/.dsh/profiles/web
-5. Restart DSH and hard-refresh
-```
-
-Update: `git pull && pnpm install && pnpm build` → just hard-refresh the browser (client changes hot-reload; only host-half changes need a DSH restart). To switch back to the npm channel, restore `"dsh-better-sidebar": "^0.16.1"` and re-run `pnpm install`.
-
-</details>
-
-<details>
-<summary><b>Install via plugin-registry (optional — use either this or the main flow)</b></summary>
-
-Prerequisite: DSH with [plugin-registry](https://github.com/dsh-external/plugin-registry) integrated (`dsh registry` available). **Enabling both channels double-mounts** (the Node half loads twice, the page gets two sidebars).
+To debug local changes or follow a development branch, point the dependency at a
+local clone and build it yourself:
 
 ```sh
-git clone https://github.com/omdsh-dev/DSH-better-sidebar.git && cd DSH-better-sidebar
+git clone https://github.com/aijunjiang/DSH-better-sidebar && cd DSH-better-sidebar
 pnpm install && pnpm build
-node scripts/package-registry.mjs   # assemble the registry/ staging (manifest + artifacts + README, not committed)
-dsh registry install ./registry     # install (disabled by default)
-dsh registry enable dsh-external/dsh-better-sidebar
+dsh plugin --profile web add <absolute path to this repo>
 ```
 
-Update: `git pull && pnpm install && pnpm build` → `node scripts/package-registry.mjs` → `dsh registry uninstall/install/enable`. Remove the other channel's mount before switching.
+`pnpm build` produces `lib/` (host half + lazy chunks); after changing client
+code a hard browser refresh is enough.
 
 </details>
+
+> The upstream official build (without remote SSH) is still the npm package
+> [`dsh-better-sidebar`](https://www.npmjs.com/package/dsh-better-sidebar),
+> maintained by [`omdsh-dev/DSH-better-sidebar`](https://github.com/omdsh-dev/DSH-better-sidebar);
+> this repository is its fork — always install via the git source above.
 
 ## ✨ Features
 

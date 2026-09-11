@@ -95,87 +95,88 @@ dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar
 
 ## 🚀 安装
 
-**前置**：已装好 DSH（`dsh web` 能正常运行），Node.js ≥ 20、pnpm ≥ 10。
+**这是 fork，安装源是本仓库（git 源），不是 npm 上的 `dsh-better-sidebar`。**
+npm 上的同名包是上游官方版，**不含**本仓库的远程 SSH 能力。
 
-**支持的 DSH 版本**：
-<a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="支持的 DSH 版本（v0.19.0 正式版）：0.1.5-rc.1+" src="https://img.shields.io/badge/DSH-0.1.5--rc.1%2B-4d6bfe" /></a>
+**前置**：已装好 DSH（`dsh web` 能正常运行），Node.js ≥ 20、pnpm ≥ 10，DSH **0.1.5-rc.1+**。
 
-> 📌 **正式版**：`v0.19.0` 起适配 DSH **0.1.5-rc.1+**（npm dist-tag `latest`）。仍停在 DSH 0.1.5-alpha.2 的用户请固定安装 `dsh-better-sidebar@0.19.0-alpha.1`；0.1.2-rc.1 稳定线用户继续用 `dsh-better-sidebar@0.18.x`；DSH ≤ 0.1.1-rc.2 请用 `dsh-better-sidebar@0.17.1`。
-
-```sh
-dsh plugin --profile web add dsh-better-sidebar@latest   # 首次会因 pnpm 11 拦截 node-pty 构建脚本而失败（依赖已写入）
-cd ~/.dsh/profiles/web && pnpm approve-builds --all      # 放行构建脚本（自动重跑安装）
-dsh plugin --profile web add dsh-better-sidebar@latest   # 重跑即成功
-```
-
-装完**硬刷新浏览器**（Cmd/Ctrl+Shift+R）即可看到侧边栏（DSH 对 client 改动热加载，无需重启；仅 host 半更新时需要重启）。
-
-**方式二：让 DSH 自己装**——把下面这段提示词发给任意一个 DSH 会话：
-
-```text
-帮我安装 dsh-better-sidebar 插件（DSH 侧边栏工作台），步骤：
-1. 执行 dsh plugin --profile web add dsh-better-sidebar@latest（首次会被 pnpm 11 拦截 node-pty 构建脚本而失败，属正常）
-2. 在 ~/.dsh/profiles/web 下执行 pnpm approve-builds --all（放行构建脚本，会自动重跑安装）
-3. 再次执行 dsh plugin --profile web add dsh-better-sidebar@latest
-4. 完成后提醒我硬刷新浏览器（Cmd/Ctrl+Shift+R）
-遇到报错先查 https://github.com/omdsh-dev/DSH-better-sidebar README 的常见问题表。
-```
-
-> 若要从 **git 源**（fork 的 SSH 能力版）安装，改发下面这段提示词：
-
-```text
-帮我从 git 源安装 dsh-better-sidebar（我的 fork，含远程 SSH 文件浏览/终端能力），步骤：
-1. 执行 dsh plugin --profile web add github:<我的用户名>/DSH-better-sidebar
-   （首次会报 ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED，属正常）
-2. 从第 1 步报错信息里提取 allowBuilds 示例中那行完整 key：
-   dsh-better-sidebar@https://codeload.github.com/<我的用户名>/DSH-better-sidebar/tar.gz/<commit>: true
-   （必须用这个带 URL 的完整形式，不能用裸包名 dsh-better-sidebar）
-3. 编辑 ~/.dsh/profiles/web/pnpm-workspace.yaml，在 allowBuilds 下写入：
-   node-pty: true
-   以及第 2 步提取的那行完整 key
-4. 在 ~/.dsh/profiles/web 下执行 pnpm install
-5. 再次执行 dsh plugin --profile web add github:<我的用户名>/DSH-better-sidebar
-6. 完成后提醒我硬刷新浏览器（Cmd/Ctrl+Shift+R）
-```
-
-**方式三：一键脚本**——克隆本仓库后执行 `bash scripts/install.sh`（macOS / Linux / Windows Git Bash；Windows 原生环境用 `install.ps1`；`-h` 查看参数），自动完成 add → 放行构建脚本 → 重跑安装。
-
-**方式四：从 git 源安装（fork 的 SSH 能力版）**——若你维护了自己的 fork（例如含远程 SSH 文件浏览/终端能力的分支），用 git 源安装：
+### 步骤 1 · 安装 remote-ssh（提供远端连接能力）
 
 ```sh
-dsh plugin --profile web add github:<你的用户名>/DSH-better-sidebar
+dsh plugin --profile web add github:aijunjiang/dsh-remote-ssh
 ```
 
-git 源的 `prepare` 构建脚本拦截机制与 npm 版不同，`pnpm approve-builds --all` **对它无效**。首次 `add` 会报：
+首次会因 pnpm 11 拦截 `ssh2` / `cpu-features` 的原生构建脚本而失败，属正常：
+
+```sh
+cd ~/.dsh/profiles/web
+# 编辑 pnpm-workspace.yaml，把 allowBuilds 下的占位改成：
+#   cpu-features: true
+#   ssh2: true
+pnpm install
+dsh plugin --profile web add github:aijunjiang/dsh-remote-ssh   # 重跑完成注册
+```
+
+### 步骤 2 · 安装本 fork
+
+```sh
+dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar
+```
+
+git 源的 `prepare` 构建脚本拦截与 npm 版不同，**`pnpm approve-builds --all` 对它无效**。首次会报：
 
 ```
 [ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... not in the "allowBuilds" allowlist.
 Add the package to "allowBuilds" ... For example:
 allowBuilds:
-  dsh-better-sidebar@https://codeload.github.com/<user>/DSH-better-sidebar/tar.gz/<commit>: true
+  dsh-better-sidebar@https://codeload.github.com/aijunjiang/DSH-better-sidebar/tar.gz/<commit>: true
 ```
 
-**必须**把报错里那个**完整 URL key**（`dsh-better-sidebar@https://codeload.github.com/.../tar.gz/<commit>`，含 commit hash，不能用裸包名）连同 `node-pty` 一起写进 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `allowBuilds`，再重跑：
+**必须**把报错里那个**完整 URL key**（含 commit hash，不能用裸包名）连同 `node-pty` 一起写进 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `allowBuilds`，再重跑：
 
 ```sh
 cd ~/.dsh/profiles/web
 # 编辑 pnpm-workspace.yaml，allowBuilds 下写入（<commit> 换成报错里的那串）：
 #   node-pty: true
-#   dsh-better-sidebar@https://codeload.github.com/<user>/DSH-better-sidebar/tar.gz/<commit>: true
-pnpm install                    # 重新构建
-dsh plugin --profile web add github:<你的用户名>/DSH-better-sidebar   # 重跑完成注册
+#   dsh-better-sidebar@https://codeload.github.com/aijunjiang/DSH-better-sidebar/tar.gz/<commit>: true
+pnpm install
+dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar   # 重跑完成注册
 ```
 
-> ⚠️ commit hash 随每次 push 变化：你 fork 的 main 每前进一次，旧 key 就失效，需用新报错里的新 hash 更新 `allowBuilds` 再重跑。
+> ⚠️ commit hash 随每次 push 变化：本仓库 main 每前进一次，旧 key 就失效，需用新报错里的新 hash 更新 `allowBuilds` 再重跑。
+
+装完**硬刷新浏览器**（Cmd/Ctrl+Shift+R）即可看到侧边栏（DSH 对 client 改动热加载，无需重启；仅 host 半更新时需要重启）。
+
+### 让 DSH 自己装
+
+把下面这段提示词发给任意一个 DSH 会话：
+
+```text
+帮我安装 dsh-better-sidebar（含远程 SSH 能力的 fork），步骤：
+1. 先装 remote-ssh：dsh plugin --profile web add github:aijunjiang/dsh-remote-ssh
+   （首次会报 ERR_PNPM_IGNORED_BUILDS（cpu-features/ssh2），属正常）
+2. 编辑 ~/.dsh/profiles/web/pnpm-workspace.yaml，把 allowBuilds 下 cpu-features 与 ssh2 改为 true，然后在该目录执行 pnpm install，再重跑第 1 步命令
+3. 再装本插件：dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar
+   （首次会报 ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED，属正常）
+4. 从第 3 步报错信息里提取 allowBuilds 示例中那行完整 key
+   （dsh-better-sidebar@https://codeload.github.com/aijunjiang/DSH-better-sidebar/tar.gz/<commit>），
+   在 ~/.dsh/profiles/web/pnpm-workspace.yaml 的 allowBuilds 下写入：
+     node-pty: true
+     以及上一步提取的那行完整 key
+5. 在 ~/.dsh/profiles/web 下执行 pnpm install，再重跑第 3 步命令
+6. 完成后提醒我硬刷新浏览器（Cmd/Ctrl+Shift+R）
+```
 
 <details>
-<summary><b>更新</b></summary>
+<summary><b>更新到最新版</b></summary>
 
 ```sh
-dsh plugin --profile web add dsh-better-sidebar@latest
+# git 源：重跑 add 即拉取 main 最新代码（commit 变化后按上面重新放行 allowBuilds）
+dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar
+dsh plugin --profile web add github:aijunjiang/dsh-remote-ssh
 ```
 
-也可把 `~/.dsh/profiles/web/package.json` 里的版本号改高后 `pnpm install`。改完**硬刷新浏览器**（Cmd/Ctrl+Shift+R）即可（client 改动无需重启 DSH）。
+改完**硬刷新浏览器**（Cmd/Ctrl+Shift+R）即可（client 改动无需重启 DSH）。
 
 </details>
 
@@ -184,58 +185,34 @@ dsh plugin --profile web add dsh-better-sidebar@latest
 
 | 现象 | 原因与解决 |
 |---|---|
-| 报 `Ignored build scripts` | pnpm 11 拦截构建脚本。在 profile 目录（`~/.dsh/profiles/web`）跑 `pnpm approve-builds --all`。 |
-| 报 `minimum release age` / 版本不足 24h | 装的版本发布不足 24 小时。等 24h 或重跑一次（pnpm 会自动补 `minimumReleaseAgeExclude`）。 |
+| 报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` | git 源的 `prepare` 脚本未放行。按上面「步骤 2」把报错里的**完整 URL key**（含 commit hash，非裸包名）写进 `pnpm-workspace.yaml` 的 `allowBuilds` 后重跑。 |
+| 报 `Ignored build scripts`（ssh2 / cpu-features） | pnpm 11 拦截原生构建脚本。在 profile 目录（`~/.dsh/profiles/web`）把 `allowBuilds` 对应项设为 `true` 后 `pnpm install`。 |
+| 装了却**没有远程 SSH 能力** | 装成了 npm 上的官方版（`dsh-better-sidebar@latest`）。本仓库必须用 `github:aijunjiang/DSH-better-sidebar` 安装，并同时安装 `dsh-remote-ssh`。 |
 | 报「找不到 profile 目录」 | 先跑一次 `dsh web`，让它初始化 `~/.dsh/profiles/web`。 |
 | 页面出现**两个侧边栏** | 双挂载。旧的手动挂载行：`~/.dsh/profiles/web/cordis.patch.yml` 还留着 `- insert: ... better-sidebar ...`，删掉那段（同 id 重复挂载 loader 会直接报 `duplicate loader entry id`）。聚合包（如 `@linxin666/dsh-web-ui-all`）以**不同 id** 挂载本包时，0.13.x 起插件自身 bundle patch 会自动退让（检测到已有启用中的同包名挂载就不挂自己），无需手动处理；若仍双挂载，先确认聚合包的 bundle 顺序在 `dsh-better-sidebar` 之前。 |
 | Windows 下终端无法使用 | `node-pty` 依赖预编译二进制；若当前 Node 版本没有对应产物，需装编译工具链（VS Build Tools）。主流 Node 版本一般已有预编译。 |
 | 终端提示「node-pty 加载失败」 | `node-pty` 安装缺失/损坏（如 pnpm 拦截了构建脚本）。终端横幅会给出修复命令：复制到 DSH 所在环境的终端/cmd 执行（在 `~/.dsh/profiles/web` 下 `pnpm approve-builds --all && pnpm rebuild node-pty`），完成后重启 DSH 并点重试。插件与 DSH 核心使用同一 `node-pty@^1.1.0`，修复后两者同步恢复。 |
-| 提示 `dsh: command not found` | 先安装 DSH；或直接用 `npx -y --package @deepseek-ai/dsh dsh plugin --profile web add dsh-better-sidebar@latest`。 |
+| 远程文件树 / 终端仍在本地 | 未安装或未挂载 `dsh-remote-ssh`。装好它并重启 DSH；会话工作区需为 SSH 路由（`ssh://<id>/<path>` 或其本地占位路径）。 |
+| 提示 `dsh: command not found` | 先安装 DSH；或直接用 `npx -y --package @deepseek-ai/dsh dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar`。 |
 
 </details>
 
 <details>
-<summary><b>从源码安装 / 开发（可选，替代 npm 方式）</b></summary>
+<summary><b>从源码安装 / 开发（可选）</b></summary>
 
 调试本地改动或跟随开发分支时，把依赖指向本地克隆并自行构建：
 
-```text
-1. git clone https://github.com/omdsh-dev/DSH-better-sidebar.git ~/Code/DSH-better-sidebar
-   cd ~/Code/DSH-better-sidebar && pnpm install && pnpm build
-2. ~/.dsh/profiles/web/package.json 的 dependencies 写 "dsh-better-sidebar": "link:<克隆目录绝对路径>"
-3. ~/.dsh/profiles/web/cordis.patch.yml 追加挂载行（需要指定终端 shell 时，在行内加 `config.shell`；`config.shellArgs` 可带参启动，非空时替换默认的 `-l`。不填则自动解析 `$SHELL` / 登录 shell / powershell.exe）：
-   - insert:
-       - id: better-sidebar
-         name: 'dsh-better-sidebar'
-         config:
-           shell: /bin/zsh
-           shellArgs:
-             - --noprofile
-             - --no-rc
-4. 在 ~/.dsh/profiles/web 执行 pnpm install
-5. 硬刷新浏览器（Cmd/Ctrl+Shift+R）即可看到效果（client 改动无需重启 DSH；host 半改动才需重启）
-```
-
-更新：`git pull && pnpm install && pnpm build` → 硬刷新浏览器即可（client 改动热加载生效，无需重启 DSH；host 半改动才需重启）。切回 npm 通道时，把依赖改回 `"dsh-better-sidebar": "^0.16.1"` 再 `pnpm install`。
-
-</details>
-
-<details>
-<summary><b>通过 plugin-registry 安装（可选，与上述二选一）</b></summary>
-
-前置：DSH 已集成 [plugin-registry](https://github.com/dsh-external/plugin-registry)（`dsh registry` 可用）。**同时启用两个通道会双挂载**（Node 半挂两次、页面两个侧边栏）。
-
 ```sh
-git clone https://github.com/omdsh-dev/DSH-better-sidebar.git && cd DSH-better-sidebar
+git clone https://github.com/aijunjiang/DSH-better-sidebar && cd DSH-better-sidebar
 pnpm install && pnpm build
-node scripts/package-registry.mjs   # 组装 registry/ 暂存（含清单 + 产物 + README，不入库）
-dsh registry install ./registry     # 安装（默认禁用）
-dsh registry enable dsh-external/dsh-better-sidebar
+dsh plugin --profile web add <本仓库绝对路径>
 ```
 
-更新：`git pull && pnpm install && pnpm build` → `node scripts/package-registry.mjs` → `dsh registry uninstall/install/enable`。切换通道前先移除另一通道的挂载。
+`pnpm build` 产出 `lib/`（host 半 + 各懒加载 chunk）；改动 client 后硬刷新浏览器即可生效。
 
 </details>
+
+> 上游官方版（不含远程 SSH 能力）仍是 npm 上的 [`dsh-better-sidebar`](https://www.npmjs.com/package/dsh-better-sidebar)，由 [`omdsh-dev/DSH-better-sidebar`](https://github.com/omdsh-dev/DSH-better-sidebar) 维护；本仓库是它的 fork，安装请始终用上面的 git 源。
 
 ## ✨ 功能一览
 

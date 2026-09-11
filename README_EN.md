@@ -25,10 +25,66 @@
   <img alt="dsh-better-sidebar workbench" src="https://github.com/user-attachments/assets/dfdb875e-a1a8-4d4b-8340-353736b1708f" />
 </div>
 
+---
+
+## ⚡ This fork: remote-SSH enhanced
+
+> **This is a fork of [`omdsh-dev/DSH-better-sidebar`](https://github.com/omdsh-dev/DSH-better-sidebar)**,
+> adapted to the **[`dsh-remote-ssh`](https://github.com/aijunjiang/dsh-remote-ssh)** plugin:
+> when a session is routed to a remote host, the sidebar's file tree, editor, previews and
+> terminal act **on that machine** instead of on the local placeholder directory.
+
+### What this fork adds
+
+| Capability | What it does | Upstream |
+|---|---|---|
+| **🌐 Remote file tree (SFTP)** | When the session workspace lives on an SSH route, the explorer lists / reads / writes the remote directory over SFTP. Display paths stay placeholder-shaped, so the tree, breadcrumbs and editor need no changes. | ❌ lists the empty local placeholder |
+| **💻 Remote terminal (SSH PTY)** | The terminal opens a login shell **on the remote host** (`cd <remote workspace> && exec <shell>`), riding the same multiplexed SSH connection as file IO. Killing the terminal closes only its channel; the shared connection stays alive. | ❌ spawns a local shell in the empty placeholder |
+| **📤 Remote upload (SFTP)** | File / folder uploads stream straight to the remote target (atomic publication: temp file → rename). | ❌ uploads into the local placeholder |
+| **⚡ Automatic route detection** | Resolves the remote connection through `ctx.get('sshRegistry')`, recognizing both `ssh://<id>/<path>` and the `<dsh-home>/dsh-ssh-routes/<id>/<path>` placeholder. **With remote-ssh absent, every path falls through to the original local logic — zero behavior change.** | — |
+
+### Requirements
+
+| Component | Version | Notes |
+|---|---|---|
+| DSH | **0.1.5-rc.1+** | This fork is based on upstream **v0.19.0** (the DSH 0.1.5-rc.1 adaptation) |
+| [dsh-remote-ssh](https://github.com/aijunjiang/dsh-remote-ssh) | v0.3.3+ | Provides the `sshRegistry` service and remote connection management; without it this fork behaves like upstream |
+
+### Quick install
+
+```sh
+# 1) remote-ssh — the remote connection capability
+dsh plugin --profile web add github:aijunjiang/dsh-remote-ssh
+
+# 2) this fork — the SSH-enhanced sidebar
+dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar
+```
+
+> ⚠️ Both git sources involve approving native build scripts (remote-ssh's `ssh2`/`cpu-features`,
+> this plugin's `node-pty`). Full steps — including pnpm 11's
+> `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` handling and an agent prompt — are in
+> **[🚀 Installation](#-installation)** below.
+
+### How it works
+
+```
+browser (local)                    remote host
+┌──────────────────┐              ┌──────────────────────┐
+│ DSH Web GUI      │              │ your project dir     │
+│  ├ sessions/config│  SSH (shared)│  ├ file tree (SFTP)  │
+│  └ the sidebar    │ ───────────▶ │  ├ editor read/write │
+│                  │              │  └ terminal (PTY)    │
+└──────────────────┘              └──────────────────────┘
+     sessions and $DSH_HOME stay local; files and commands run remotely
+```
+
+---
+
 ## 📑 Contents
 
-- [✨ Features](#-features)
+- [⚡ This fork: remote-SSH enhanced](#-this-fork-remote-ssh-enhanced)
 - [🚀 Installation](#-installation)
+- [✨ Features](#-features)
 - [🖼️ Feature Tour](#-feature-tour)
 - [🌐 Plugin Ecosystem](#-plugin-ecosystem)
 - [🆕 Recent Updates](#-recent-updates)
@@ -37,24 +93,6 @@
 - [🛠️ Development & Build](#-development--build)
 - [🔐 Security](#-security) · [⚠️ Known Limitations](#-known-limitations) · [🖥️ Platform Support](#-platform-support)
 - [💬 Community](#-community) · [🤝 Contributing](#-contributing) · [⭐ Star History](#-star-history) · [🔗 Friends](#-friends)
-
-## ✨ Features
-
-- **🗂️ File Workbench**: file explorer (lazy-loading tree; symlinks show their target kind — directory links expand, dangling links flagged) + CodeMirror editor; inline preview for images / Markdown (incl. Mermaid diagrams, strict-mode safe rendering + click-to-zoom) / HTML / PDF
-- **🌐 Embedded Browser**: multiple web tabs with back / forward / refresh; content runs in a sandboxed iframe; external links are routed by protocol by default — HTTP opens in the sidebar, HTTPS goes to the system browser (both adjustable in settings)
-- **💻 Real Terminal**: xterm.js + node-pty real shell, reconnect with transcript replay; optionally injects `terminal_*` tools for the model
-- **📂 Model-driven sidebar opens (opt-in)**: with the global setting on, the `sidebar_open` tool lets the model actively open files / folders (tree rooted there) / HTTP(S) pages in the sidebar
-- **🌿 Changes**: one tab, two lenses — **Git** (real diff / history / stage·commit·revert / worktree & child-repo selection) and **This Session** (live tracking of every file the model reads / writes / edits, grouped by file with kind filters); a unified diff renderer (mod pairing + intra-line character highlights + syntax coloring incl. mjs/cjs/mts/cts, CSS/SCSS/Less, HTML/XML/SVG/Vue, GraphQL, JSONC/JSON5 + context folding), a draggable bottom preview pane, and one-click expansion into a dedicated diff tab; `.md` ops (read / write / edit) offer a **reading-mode** toggle in the preview header — the shared MarkdownText renders GFM tables / task lists / strikethrough / footnotes / math, with local images rewritten through the /sidebar/file media route; documents with ```mermaid fences render through the editor's lazy mermaid renderer (click-to-zoom / pan diagrams); **secret redaction** — credential-shaped paths mask whole files and ordinary files mask secret-shaped values (api_key: / Bearer / sk- / AKIA / ghp_ / PEM …, field names kept), on by default with a one-click preview-pane toggle (persisted in localStorage), display-only — session data untouched. Known edge: an unquoted mermaid label containing a redacted secret breaks the diagram (falls back to source); workaround: quote the label. `.html` ops (read / write / edit) gain a **Render** toggle in the preview head — the editor's `/sidebar/html` route iframe, with relative assets resolving inside the route and segmented reads rendering the full document; always sandboxed (opaque origin + CSP header, no escape hatch). `.pdf` ops (read / write / edit) gain the same **Render** toggle — the editor's PDF preview reused verbatim (media-route bytes + explicit Blob, the browser's native viewer inline, with a download fallback)
-- **🧩 Background Tasks**: agent topology + background tasks (exit codes / live output / force-kill)
-- **💬 Side Chat (beta)**: Codex-style side threads — the child inherits the parent's FULL context (completed turns + the pending question + the in-progress turn's assistant output and tool activity, honestly frozen as "interrupted") and runs independently without entering the main conversation; threads support continuous follow-ups (auto-resumed after a DSH restart) and one-click "Save as new session" promotion to a top-level session
-- **🖥️ Native right sidebar + plugin bottom workbench**: the right column belongs to DSH 0.1.5's own sidebar — the plugin registers every tab type as a native tab (file opens go through `dsh-resource://file/**`, and the built-in Files page / file tree is taken over), keeping only its own bottom workbench (split panes / terminals / per-session persistence) whose toggle sits in the session header
-- **📌 Pinned Terminals**: right-click a terminal tab to "Pin to Workspace / Pin Globally" — pinned terminals survive session switches and surface inline in the TabBar as virtual tabs (click activates in-place, PTY connects directly to the home session's PTY via WS, no session jump needed); agent terminals exempted from reconcile removal
-- **🔁 Session Isolation**: layout / tabs / panels persisted per session, stale state auto-purged
-- **⚙️ Declarative Settings**: per-item toggles in the "Side Cards" settings section, secondary settings via the gear dialog
-- **⚡ On-demand Loading**: only ~325KB core at startup; heavy deps (terminal / editor / mermaid diagrams) load on demand ([design](docs/plans/2026-08-12-lazy-chunks-design.md))
-- **🌏 i18n**: UI text follows DSH's language (zh / en) with live switching; with the optional `@huanlin/dsh-plugin-better-locale` peer, 19 third-language overlays (ja / de / fr / …) are available
-
-> 🔌 **Core principle**: service-first — the 8 built-in tabs + 6 viewers register through the same `ctx.betterSidebar` API as third-party plugins, with fully equal capabilities; anything the ecosystem can provide better is delegated to ecosystem plugins (**28+ ecosystem plugins** already — see "🌐 Plugin Ecosystem" below). See "🔌 Service API" and the [external plugin guide](./docs/external-plugin-guide.md).
 
 ## 🚀 Installation
 
@@ -154,6 +192,24 @@ dsh registry enable dsh-external/dsh-better-sidebar
 Update: `git pull && pnpm install && pnpm build` → `node scripts/package-registry.mjs` → `dsh registry uninstall/install/enable`. Remove the other channel's mount before switching.
 
 </details>
+
+## ✨ Features
+
+- **🗂️ File Workbench**: file explorer (lazy-loading tree; symlinks show their target kind — directory links expand, dangling links flagged) + CodeMirror editor; inline preview for images / Markdown (incl. Mermaid diagrams, strict-mode safe rendering + click-to-zoom) / HTML / PDF
+- **🌐 Embedded Browser**: multiple web tabs with back / forward / refresh; content runs in a sandboxed iframe; external links are routed by protocol by default — HTTP opens in the sidebar, HTTPS goes to the system browser (both adjustable in settings)
+- **💻 Real Terminal**: xterm.js + node-pty real shell, reconnect with transcript replay; optionally injects `terminal_*` tools for the model
+- **📂 Model-driven sidebar opens (opt-in)**: with the global setting on, the `sidebar_open` tool lets the model actively open files / folders (tree rooted there) / HTTP(S) pages in the sidebar
+- **🌿 Changes**: one tab, two lenses — **Git** (real diff / history / stage·commit·revert / worktree & child-repo selection) and **This Session** (live tracking of every file the model reads / writes / edits, grouped by file with kind filters); a unified diff renderer (mod pairing + intra-line character highlights + syntax coloring incl. mjs/cjs/mts/cts, CSS/SCSS/Less, HTML/XML/SVG/Vue, GraphQL, JSONC/JSON5 + context folding), a draggable bottom preview pane, and one-click expansion into a dedicated diff tab; `.md` ops (read / write / edit) offer a **reading-mode** toggle in the preview header — the shared MarkdownText renders GFM tables / task lists / strikethrough / footnotes / math, with local images rewritten through the /sidebar/file media route; documents with ```mermaid fences render through the editor's lazy mermaid renderer (click-to-zoom / pan diagrams); **secret redaction** — credential-shaped paths mask whole files and ordinary files mask secret-shaped values (api_key: / Bearer / sk- / AKIA / ghp_ / PEM …, field names kept), on by default with a one-click preview-pane toggle (persisted in localStorage), display-only — session data untouched. Known edge: an unquoted mermaid label containing a redacted secret breaks the diagram (falls back to source); workaround: quote the label. `.html` ops (read / write / edit) gain a **Render** toggle in the preview head — the editor's `/sidebar/html` route iframe, with relative assets resolving inside the route and segmented reads rendering the full document; always sandboxed (opaque origin + CSP header, no escape hatch). `.pdf` ops (read / write / edit) gain the same **Render** toggle — the editor's PDF preview reused verbatim (media-route bytes + explicit Blob, the browser's native viewer inline, with a download fallback)
+- **🧩 Background Tasks**: agent topology + background tasks (exit codes / live output / force-kill)
+- **💬 Side Chat (beta)**: Codex-style side threads — the child inherits the parent's FULL context (completed turns + the pending question + the in-progress turn's assistant output and tool activity, honestly frozen as "interrupted") and runs independently without entering the main conversation; threads support continuous follow-ups (auto-resumed after a DSH restart) and one-click "Save as new session" promotion to a top-level session
+- **🖥️ Native right sidebar + plugin bottom workbench**: the right column belongs to DSH 0.1.5's own sidebar — the plugin registers every tab type as a native tab (file opens go through `dsh-resource://file/**`, and the built-in Files page / file tree is taken over), keeping only its own bottom workbench (split panes / terminals / per-session persistence) whose toggle sits in the session header
+- **📌 Pinned Terminals**: right-click a terminal tab to "Pin to Workspace / Pin Globally" — pinned terminals survive session switches and surface inline in the TabBar as virtual tabs (click activates in-place, PTY connects directly to the home session's PTY via WS, no session jump needed); agent terminals exempted from reconcile removal
+- **🔁 Session Isolation**: layout / tabs / panels persisted per session, stale state auto-purged
+- **⚙️ Declarative Settings**: per-item toggles in the "Side Cards" settings section, secondary settings via the gear dialog
+- **⚡ On-demand Loading**: only ~325KB core at startup; heavy deps (terminal / editor / mermaid diagrams) load on demand ([design](docs/plans/2026-08-12-lazy-chunks-design.md))
+- **🌏 i18n**: UI text follows DSH's language (zh / en) with live switching; with the optional `@huanlin/dsh-plugin-better-locale` peer, 19 third-language overlays (ja / de / fr / …) are available
+
+> 🔌 **Core principle**: service-first — the 8 built-in tabs + 6 viewers register through the same `ctx.betterSidebar` API as third-party plugins, with fully equal capabilities; anything the ecosystem can provide better is delegated to ecosystem plugins (**28+ ecosystem plugins** already — see "🌐 Plugin Ecosystem" below). See "🔌 Service API" and the [external plugin guide](./docs/external-plugin-guide.md).
 
 ## 🖼️ Feature Tour
 

@@ -84,7 +84,52 @@ dsh plugin --profile web add dsh-better-sidebar@latest   # 重跑即成功
 遇到报错先查 https://github.com/omdsh-dev/DSH-better-sidebar README 的常见问题表。
 ```
 
+> 若要从 **git 源**（fork 的 SSH 能力版）安装，改发下面这段提示词：
+
+```text
+帮我从 git 源安装 dsh-better-sidebar（我的 fork，含远程 SSH 文件浏览/终端能力），步骤：
+1. 执行 dsh plugin --profile web add github:<我的用户名>/DSH-better-sidebar
+   （首次会报 ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED，属正常）
+2. 从第 1 步报错信息里提取 allowBuilds 示例中那行完整 key：
+   dsh-better-sidebar@https://codeload.github.com/<我的用户名>/DSH-better-sidebar/tar.gz/<commit>: true
+   （必须用这个带 URL 的完整形式，不能用裸包名 dsh-better-sidebar）
+3. 编辑 ~/.dsh/profiles/web/pnpm-workspace.yaml，在 allowBuilds 下写入：
+   node-pty: true
+   以及第 2 步提取的那行完整 key
+4. 在 ~/.dsh/profiles/web 下执行 pnpm install
+5. 再次执行 dsh plugin --profile web add github:<我的用户名>/DSH-better-sidebar
+6. 完成后提醒我硬刷新浏览器（Cmd/Ctrl+Shift+R）
+```
+
 **方式三：一键脚本**——克隆本仓库后执行 `bash scripts/install.sh`（macOS / Linux / Windows Git Bash；Windows 原生环境用 `install.ps1`；`-h` 查看参数），自动完成 add → 放行构建脚本 → 重跑安装。
+
+**方式四：从 git 源安装（fork 的 SSH 能力版）**——若你维护了自己的 fork（例如含远程 SSH 文件浏览/终端能力的分支），用 git 源安装：
+
+```sh
+dsh plugin --profile web add github:<你的用户名>/DSH-better-sidebar
+```
+
+git 源的 `prepare` 构建脚本拦截机制与 npm 版不同，`pnpm approve-builds --all` **对它无效**。首次 `add` 会报：
+
+```
+[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... not in the "allowBuilds" allowlist.
+Add the package to "allowBuilds" ... For example:
+allowBuilds:
+  dsh-better-sidebar@https://codeload.github.com/<user>/DSH-better-sidebar/tar.gz/<commit>: true
+```
+
+**必须**把报错里那个**完整 URL key**（`dsh-better-sidebar@https://codeload.github.com/.../tar.gz/<commit>`，含 commit hash，不能用裸包名）连同 `node-pty` 一起写进 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `allowBuilds`，再重跑：
+
+```sh
+cd ~/.dsh/profiles/web
+# 编辑 pnpm-workspace.yaml，allowBuilds 下写入（<commit> 换成报错里的那串）：
+#   node-pty: true
+#   dsh-better-sidebar@https://codeload.github.com/<user>/DSH-better-sidebar/tar.gz/<commit>: true
+pnpm install                    # 重新构建
+dsh plugin --profile web add github:<你的用户名>/DSH-better-sidebar   # 重跑完成注册
+```
+
+> ⚠️ commit hash 随每次 push 变化：你 fork 的 main 每前进一次，旧 key 就失效，需用新报错里的新 hash 更新 `allowBuilds` 再重跑。
 
 <details>
 <summary><b>更新</b></summary>

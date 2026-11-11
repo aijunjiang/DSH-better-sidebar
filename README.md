@@ -28,6 +28,39 @@
 
 **Also**: 📂 the `sidebar_open` tool lets the model open the sidebar itself · ⚡ ~325KB core at startup, heavy chunks load on demand · 🌏 i18n follows DSH · 📱 narrow screens switch to a full-width drawer
 
+### 🔗 SSH-routed workspaces (with dsh-remote-ssh)
+
+When `dsh-remote-ssh` is mounted, a session whose workspace lives on a remote
+host gets a LOCAL placeholder path (`<dsh home>/dsh-ssh-routes/<connId>/<path>`)
+whose bytes are on the other machine. This branch routes the sidebar's file work
+over SFTP and lands the terminal on the target, so both keep matching the
+directory the session actually runs in.
+
+| Capability | What happens |
+|---|---|
+| **Explorer** | Lists the real remote tree over SFTP; symlinked directories expand like directories |
+| **Editor** | Reads and saves over SFTP; a save still refuses a file that changed remotely since it was loaded |
+| **Media & HTML preview** | Served from the remote bytes |
+| **Upload** | Streamed to a bounded local staging file, pushed with `fastPut`, renamed into place atomically |
+| **Delete / rename / mkdir / new file** | Emptied bottom-up then `rmdir`, `rename`, `mkdir`, and an `EEXIST`-checked empty write |
+| **Bottom terminal** | Types one bootstrap line that lands an interactive shell on the target in the routed directory |
+
+Two properties make this safe to run alongside local work:
+
+- **Display paths never change.** The tree, breadcrumbs, editor tabs and diff
+  views keep using the placeholder; only the SFTP calls use the remote path.
+- **Nothing is required.** Without `dsh-remote-ssh`, every branch falls through
+  to the existing `node:fs` code and behaviour is identical to upstream.
+
+The terminal bootstrap is deliberately built on the HOST: the connection records
+live there, so no password reaches the browser. It prefers key authentication
+(the harness-provisioned key is discovered automatically) and, because a terminal
+echoes whatever it is sent, it clears the screen ON THE TARGET between ssh
+attaching and the shell painting its prompt — the only ordering where neither the
+bootstrap line nor the remote prompt is left damaged.
+
+---
+
 ### 🌿 Git Graph (read-only commit graph)
 
 Switch to **Git Graph** at the top of the Git panel for commit nodes, forks and merge edges across local branches, remote-tracking branches and HEAD. The branch selector only filters history — it **never checks out or fetches**; each commit is one line (lane edges + ref pills + subject), hover shows the author and short hash, and selecting one opens its full message and diff in the bottom pane. History loads in pages; reference changes during pagination prompt a refresh; reads are bounded (200 commits per page, offset 10,000, 1,000 branches) and report an explicit error past a limit. Lightweight and annotated tags appear on commits in the graph, rows and details use neutral tag pills, and tag changes invalidate pagination. Tag decorations keep the first 5,000 tags by ref name, further bounded by an 8 MiB complete-line output prefix; excess tags are omitted without failing the graph.

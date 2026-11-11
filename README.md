@@ -18,6 +18,67 @@
   <video src="https://github.com/user-attachments/assets/23187822-047e-45cc-b480-fe997bd55b86" muted autoplay loop playsinline controls width="100%"></video>
 </div>
 
+## ⚡ This fork: SSH-routed workspaces
+
+> **A fork of [`omdsh-dev/DSH-better-sidebar`](https://github.com/omdsh-dev/DSH-better-sidebar)**
+> that adapts the sidebar to **[`dsh-remote-ssh`](https://github.com/aijunjiang/dsh-remote-ssh)**:
+> when a session's workspace lives on a remote host, the file tree, editor,
+> previews and terminal work **against the remote machine** instead of the empty
+> local placeholder directory.
+
+### What this fork adds
+
+| Capability | What it does | Upstream |
+|---|---|---|
+| **🌐 Remote file tree (SFTP)** | On an SSH route the explorer lists / reads / writes the remote directory over SFTP. Display paths stay the placeholder, so the tree, breadcrumbs and editor need no changes | ❌ reads the empty local placeholder |
+| **💻 Remote terminal** | The bottom terminal lands an interactive shell **on the target** in the routed directory, riding the same multiplexed SSH connection as file IO | ❌ opens a local shell in an empty placeholder |
+| **📤 Remote upload (SFTP)** | Uploads stream to a bounded staging file, `fastPut` over SFTP, then rename into place atomically | ❌ writes to the local placeholder |
+| **🗑 Remote mutations** | Delete (bottom-up then `rmdir`), rename, mkdir and empty-file creation all run over SFTP, with an mtime fence on save | ❌ fail with ENOENT on paths that only exist remotely |
+| **⚡ Automatic route detection** | Resolves the connection through `ctx.get('sshRegistry')`, recognising both `ssh://<id>/<path>` and `<dsh-home>/dsh-ssh-routes/<id>/<path>`. **Without remote-ssh every branch falls back to the original local code — zero behaviour change** | — |
+
+### Requirements
+
+| Component | Version | Notes |
+|---|---|---|
+| DSH | **0.2.2-rc.1+** | This fork tracks upstream **v0.30.1** (the DSH 0.2.2 adaptation). For DSH 0.1.5-rc.1+ use the previous fork line, **v0.19.0** |
+| [dsh-remote-ssh](https://github.com/aijunjiang/dsh-remote-ssh) | **v0.4.0+** | Provides `sshRegistry` and connection management. Without it this fork behaves exactly like upstream |
+
+### Install
+
+```sh
+# 1) remote-ssh (provides the remote connection service)
+dsh plugin --profile web add github:aijunjiang/dsh-remote-ssh
+
+# 2) this fork (SSH-routed file IO + terminal)
+dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar
+```
+
+> ⚠️ Both are git sources that build through a `prepare` script, which pnpm
+> blocks until allowed. pnpm prints the exact `allowBuilds` line to paste into
+> `<DSH_HOME>/profiles/web/pnpm-workspace.yaml` — copy it verbatim, including
+> the resolved commit sha. See [🚀 Installation](#-installation).
+
+### How it works
+
+```
+Browser (this machine)              Remote host
+┌──────────────────┐              ┌──────────────────────┐
+│ DSH Web GUI      │              │ your project         │
+│  ├ sessions      │  SSH (mux)   │  ├ file tree (SFTP)  │
+│  └ sidebar       │ ───────────▶ │  ├ editor read/write │
+│                  │              │  └ terminal (PTY)    │
+└──────────────────┘              └──────────────────────┘
+       ▲                                    │
+       └──────── display path = ────────────┘
+         <dsh home>/dsh-ssh-routes/<conn>/<remote path>
+```
+
+The placeholder path exists only so the host has something valid to name; every
+byte lives on the target. That split is why the display path can stay untouched:
+only the SFTP calls translate it.
+
+---
+
 ## ✨ Features
 
 | | |

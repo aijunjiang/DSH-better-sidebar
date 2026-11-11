@@ -18,6 +18,64 @@
   <video src="https://github.com/user-attachments/assets/23187822-047e-45cc-b480-fe997bd55b86" muted autoplay loop playsinline controls width="100%"></video>
 </div>
 
+## ⚡ 本仓库：SSH 路由工作区增强版
+
+> **[`omdsh-dev/DSH-better-sidebar`](https://github.com/omdsh-dev/DSH-better-sidebar) 的 fork**，
+> 适配了 **[`dsh-remote-ssh`](https://github.com/aijunjiang/dsh-remote-ssh)**：
+> 会话工作区在远端主机上时，文件树、编辑器、预览与终端**直接作用于远端机器**，
+> 而不是本地的空占位目录。
+
+### 新增能力
+
+| 能力 | 说明 | 上游官方版 |
+|---|---|---|
+| **🌐 远程文件树（SFTP）** | SSH 路由下，资源管理器通过 SFTP 列出 / 读取 / 写入远端目录。显示路径仍是占位形式，树、面包屑、编辑器都无需改动 | ❌ 只读空的本地占位目录 |
+| **💻 远程终端** | 底部终端把交互式 shell 落到**目标机**的对应目录，与文件 IO 共用同一条复用 SSH 连接 | ❌ 在空占位目录里起本地 shell |
+| **📤 远程上传（SFTP）** | 先流式写入有界的本地 staging 文件，`fastPut` 推到远端，再原子改名到目标 | ❌ 传到本地占位目录 |
+| **🗑 远程增删改** | 删除（自底向上清空再 `rmdir`）、重命名、建目录、建空文件全部走 SFTP；保存带 mtime 栅栏 | ❌ 对只存在于远端的路径报 ENOENT |
+| **⚡ 自动识别路由** | 通过 `ctx.get('sshRegistry')` 解析连接，同时识别 `ssh://<id>/<path>` 与 `<dsh-home>/dsh-ssh-routes/<id>/<path>`。**未装 remote-ssh 时全部分支回落到原有本地代码，零行为变化** | — |
+
+### 前置条件
+
+| 组件 | 版本 | 说明 |
+|---|---|---|
+| DSH | **0.2.2-rc.1+** | 本 fork 基于上游 **v0.30.1**（DSH 0.2.2 适配版）。DSH 0.1.5-rc.1+ 请用上一条 fork 线 **v0.19.0** |
+| [dsh-remote-ssh](https://github.com/aijunjiang/dsh-remote-ssh) | **v0.4.0+** | 提供 `sshRegistry` 与远端连接管理；不装则本 fork 等同官方版 |
+
+### 快速安装
+
+```sh
+# 1) 安装 remote-ssh（提供远端连接能力）
+dsh plugin --profile web add github:aijunjiang/dsh-remote-ssh
+
+# 2) 安装本 fork（含 SSH 增强）
+dsh plugin --profile web add github:aijunjiang/DSH-better-sidebar
+```
+
+> ⚠️ 两者都是走 `prepare` 构建的 git 源，pnpm 默认拦下构建脚本。
+> 它会打印需要粘贴到 `<DSH_HOME>/profiles/web/pnpm-workspace.yaml` 的
+> `allowBuilds` 行——**照抄，包含解析后的 commit sha**。详见 [🚀 安装](#-安装)。
+
+### 工作方式
+
+```
+浏览器（本机）                     远端主机
+┌──────────────────┐              ┌──────────────────────┐
+│ DSH Web GUI      │              │ 你的项目目录          │
+│  ├ 会话 / 配置    │  SSH(复用)   │  ├ 文件树（SFTP）     │
+│  └ 侧边栏         │ ───────────▶ │  ├ 编辑器读写         │
+│                  │              │  └ 终端（PTY）        │
+└──────────────────┘              └──────────────────────┘
+       ▲                                    │
+       └──────── 显示路径 = ────────────────┘
+         <dsh-home>/dsh-ssh-routes/<连接>/<远端路径>
+```
+
+占位路径存在的唯一理由是让宿主有个合法的名字可用；每一个字节都在目标机上。
+正因为如此，显示路径才能保持不动——只有 SFTP 调用会去翻译它。
+
+---
+
 ## ✨ 特色功能
 
 | | |

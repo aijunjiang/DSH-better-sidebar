@@ -49,6 +49,8 @@ import { buildSidechatApi } from './sidechat-routes.ts'
 import { createAssistantLiveBuffer, type AssistantLiveBuffer } from './assistant-live.ts'
 import { readSidechatImage } from './sidechat-routes.ts'
 import { SIDECHAT_METADATA_BYTES, sidechatPromptBodyLimit } from './sidechat-image-admission.ts'
+import { parseRemoteRoute, readRemoteBytes } from './remote-fs.ts'
+import { buildRemoteShellBootstrap } from './remote-shell.ts'
 import { readJsonBody, readTextBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
 import { streamFileToResponse } from './file-stream.ts'
 import { createChangesOpsApi } from './changes-ops.ts'
@@ -513,7 +515,41 @@ export type SidebarReadResult =
  * Text encoding is detected before the NUL-based binary verdict, so UTF-16 /
  * UTF-32 / GBK text stays text.
  */
-async function readText(path: string): Promise<SidebarReadResult> {
+/**
+ * Read one remote file over SFTP and map it onto the same three-outcome
+ * contract as {@link readText}: `text`, `binary`, or `too-large`. The whole
+ * remote file is transferred (SFTP has no ranged read here), so the size policy
+ * is applied AFTER the read; an oversized file still only reports its head.
+ * @param ctx - cordis context carrying remote-ssh's `sshRegistry`.
+ * @param path - the placeholder or `ssh://` path naming the remote file.
+ * @returns the editor-host read result.
+ * @throws {SidebarError} fs-error when the file is a directory or unreadable.
+ */
+async function readRemoteTextResult(ctx: Context, path: string): Promise<SidebarReadResult> {
+  let data: Buffer
+  let size: number
+  let isFile: boolean
+  try {
+    const read = await readRemoteBytes(ctx, path)
+    data = read.data
+    size = read.size
+    isFile = read.isFile
+  } catch (error) {
+    throw new SidebarError('fs-error', `cannot read "${path}": ${error instanceof Error ? error.message : String(error)}`, 400)
+  }
+  if (!isFile) throw new SidebarError('fs-error', `"${path}" is a directory`, 400)
+  const head = data.subarray(0, Math.min(data.length, READ_HEAD_LIMIT)).toString('base64')
+  if (size > MAX_EDITABLE_BYTES) return { kind: 'too-large', size, mtimeMs: 0, head }
+  const decoded = decodeTextBytes(data, false)
+  if (decoded === null) return { kind: 'binary', size, mtimeMs: 0, head }
+  return { kind: 'text', content: decoded.content, size, mtimeMs: 0 }
+}
+
+async function readText(path: string, ctx?: Context): Promise<SidebarReadResult> {
+  // SSH-routed workspace: the bytes live on the SSH host, so read over SFTP.
+  if (ctx !== undefined && parseRemoteRoute(path) !== null) {
+    return await readRemoteTextResult(ctx, path)
+  }
   const info = await stat(path).catch((error: unknown) => {
     throw new SidebarError('fs-error', `cannot read "${path}": ${error instanceof Error ? error.message : String(error)}`, 400)
   })
@@ -798,7 +834,7 @@ function buildApi(
       // budget equals them on purpose — see PROBE_BUDGET), but building one
       // here keeps the two listing routes the same shape, so neither can ever
       // fan out per row without a budget.
-      return listDirectory(target, resolved.listLimit, exclude, createProbeGate())
+      return listDirectory(target, resolved.listLimit, exclude, createProbeGate(), ctx)
     },
     // Batch listing: one request for every level the tree has expanded, so a
     // mount/refresh costs one round trip instead of N. Each path rides the
@@ -833,7 +869,7 @@ function buildApi(
         const homeRelative = raw === '~' || raw.startsWith('~/') || raw.startsWith('~\\')
         const requested = isAbsolute(raw) || homeRelative ? raw : `${cwd}${sep}${raw}`
         try {
-          return await listDirectory(await ensureWorkspacePath(cwd, requested), resolved.listLimit, exclude, gate)
+          return await listDirectory(await ensureWorkspacePath(cwd, requested), resolved.listLimit, exclude, gate, ctx)
         } catch (error) {
           // Per-level failure: the batch itself stays a success (one unreadable
           // directory must not blank the whole tree).
@@ -863,7 +899,7 @@ function buildApi(
       // cwd; thread it so the path resolves inside the authorized workspace.
       const selected = selectedRepoOf(payload)
       const path = await ensureWorkspacePath(cwd, await resolveGitPath(cwd, requireString(payload, 'path'), selected))
-      return await readText(path)
+      return await readText(path, ctx)
     },
     // One byte window of a large text file, for the read-only paged preview.
     // The window is line-aligned by the host, so the client can treat each
@@ -888,6 +924,7 @@ function buildApi(
         cwd,
         path: requireString(payload, 'path'),
         name: requireString(payload, 'name'),
+        ctx,
       })
     },
     // The tree's "new folder": one directory inside an existing row, with
@@ -898,6 +935,7 @@ function buildApi(
         cwd,
         path: requireString(payload, 'path'),
         name: requireString(payload, 'name'),
+        ctx,
       })
     },
     // The tree's "new file": one EMPTY file inside an existing row. Same
@@ -910,6 +948,7 @@ function buildApi(
         cwd,
         path: requireString(payload, 'path'),
         name: requireString(payload, 'name'),
+        ctx,
       })
     },
     // The tree row's delete (permanent — the host has no trash): recursive
@@ -919,6 +958,7 @@ function buildApi(
       return removeWorkspaceEntry({
         cwd,
         path: requireString(payload, 'path'),
+        ctx,
       })
     },
     'git.worktrees': async (payload) => {
@@ -1720,6 +1760,7 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
           dir,
           relativePath,
           chunks: req,
+          ctx,
         })
         writeOk(res, { path, size })
       } catch (error) {
@@ -1763,6 +1804,7 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
           path,
           content,
           ...(expectedMtimeMs === undefined ? {} : { expectedMtimeMs }),
+          ctx,
         })
         writeOk(res, { ok: true, ...result })
       } catch (error) {
@@ -1809,6 +1851,40 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
     },
   }), 'dsh-better-sidebar: /sidebar/archive route')
 
+  // ── Remote shell bootstrap route ─────────────────────────────────────────
+  // The bottom terminal is a LOCAL PTY, so an SSH-routed session would open a
+  // shell in the placeholder directory. This endpoint returns the one-line
+  // command that lands the shell on the target instead; the password is
+  // resolved HERE, on the host, and never travels to the browser.
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix',
+    path: '/sidebar/remote-shell',
+    handler: async (req, res) => {
+      if (!fence(req)) {
+        writeJson(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } })
+        return
+      }
+      if (req.method !== 'GET') {
+        writeJson(res, 405, { ok: false, error: { code: 'method-error', message: 'method not allowed' } })
+        return
+      }
+      try {
+        const url = new URL(req.url ?? '/', 'http://dsh.internal')
+        const sessionId = url.searchParams.get('sessionId')
+        if (sessionId === null) throw new SidebarError('bad-request', 'sessionId is required')
+        const resolvedCwd = await activeWorktreeRootOf(ctx, sessionId, await sessionCwdOf(ctx, sessionId, url.searchParams.get('cwd') ?? undefined))
+        const bootstrap = await buildRemoteShellBootstrap(resolvedCwd)
+        if (bootstrap === null) {
+          writeJson(res, 200, { ok: true, value: null })
+          return
+        }
+        writeJson(res, 200, { ok: true, value: bootstrap })
+      } catch (error) {
+        writeError(res, error)
+      }
+    },
+  }), 'dsh-better-sidebar: /sidebar/remote-shell route')
+
   // ── Media route (images for the editor) ─────────────────────────────────
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
@@ -1839,6 +1915,25 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         // remote-mirror namespaces project. Pre-joining here would paste a
         // `~` target after the cwd and hide it from the resolver.
         const path = await ensureWorkspacePath(cwd, raw)
+        // SSH-routed workspace: the bytes live on the SSH host. SFTP has no
+        // streaming response here, so the file is read whole and written once.
+        if (parseRemoteRoute(path) !== null) {
+          const remote = await readRemoteBytes(ctx, path)
+          if (!remote.isFile) throw new SidebarError('fs-error', 'not a file', 400)
+          const remoteType = mediaTypeForPath(path)
+          const remoteHeaders: Record<string, string> = { 'content-type': remoteType, 'cache-control': 'no-cache', 'content-length': String(remote.data.length) }
+          if (remoteType === 'image/svg+xml') {
+            remoteHeaders['content-security-policy'] = "sandbox; object-src 'none'"
+            remoteHeaders['x-content-type-options'] = 'nosniff'
+            remoteHeaders['referrer-policy'] = 'no-referrer'
+          }
+          if (url.searchParams.get('download') === '1') {
+            remoteHeaders['content-disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(basename(path))}`
+          }
+          res.writeHead(200, remoteHeaders)
+          res.end(remote.data)
+          return
+        }
         const info = await statFileForRoute(path)
         if (!info.isFile()) {
           throw new SidebarError('fs-error', 'not a file', 400)

@@ -46,6 +46,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExtern
 import '@xterm/xterm/css/xterm.css'
 import type { Context } from '../context-types.ts'
 import type { SessionScope } from './api.ts'
+import { hostRouteUrl } from './host-route-url.ts'
 import type { SidebarTab } from './state.ts'
 import { t } from './locales.ts'
 import { isDarkScheme, subscribeColorScheme } from './theme.ts'
@@ -98,6 +99,83 @@ export function TerminalBottomView({ ctx, scope, tab, visible }: TerminalBottomP
     if (model === undefined) return
     return model.mount()
   }, [model])
+
+  // Remote bootstrap: a session whose workspace lives on an SSH route gets a
+  // LOCAL shell (the terminal is the host's own PTY), so it would sit in the
+  // empty placeholder directory. Once the shell is genuinely writable, one
+  // bootstrap line lands it on the target instead — the same thing a person
+  // would type. The command is built by the HOST, which owns the connection
+  // records; nothing secret is sent to this page.
+  //
+  // `bootstrapped` is keyed by the terminal identity so a "new terminal"
+  // (which mints a new contentId) bootstraps again, while a re-render or a
+  // reconnect never types the line twice.
+  const bootstrapped = useRef<Set<string>>(new Set())
+  // One bootstrap at a time per component: two overlapping runs (a remount
+  // racing the previous run's timers) both typed `stty -echo`, which is what
+  // produced the repeated line on screen.
+  const inFlight = useRef(false)
+  // The live view state, read WITHOUT being a dependency: `state` is a new
+  // object on every frame the host pushes, so depending on it rebuilt this
+  // effect dozens of times a second — and each rebuild aborted the previous
+  // run mid-flight (`bootstrapped` had already claimed the identity, so the
+  // retry returned immediately and the ssh command was never sent). Only the
+  // writable fact matters, and the ref carries it.
+  const live = useRef<HostTerminalViewState | undefined>(state)
+  live.current = state
+  useEffect(() => {
+    if (model === undefined) return
+    if (bootstrapped.current.has(contentId) || inFlight.current) return
+    inFlight.current = true
+    const controller = new AbortController()
+    let finished = false
+    const run = (async () => {
+      // Wait for a genuinely writable view instead of assuming the first
+      // render already reports one: the terminal is allocated asynchronously
+      // and `writable` only turns true once the attachment is live.
+      const deadline = Date.now() + 20000
+      while (!finished && !controller.signal.aborted) {
+        if (live.current?.writable === true) break
+        if (Date.now() > deadline) return
+        await new Promise<void>(resolve => setTimeout(resolve, 100))
+      }
+      if (finished || controller.signal.aborted) return
+      // Claimed only once the view is writable, so an early unmount does not
+      // burn the identity and leave the terminal un-bootstrapped forever.
+      if (bootstrapped.current.has(contentId)) return
+      try {
+        const params = new URLSearchParams({ sessionId })
+        if (scope.cwd !== undefined && scope.cwd !== '') params.set('cwd', scope.cwd)
+        const response = await fetch(hostRouteUrl(`sidebar/remote-shell?${params.toString()}`).href, {
+          signal: controller.signal,
+        })
+        if (!response.ok) return
+        const payload = await response.json() as { ok?: boolean; value?: { command?: string } | null }
+        const command = payload.ok === true ? payload.value?.command : undefined
+        if (typeof command !== 'string' || command === '') return
+        // Claimed only once there is something to type: a transient failure
+        // (or a local session, which answers null) must not burn the identity
+        // and leave the terminal un-bootstrapped for the rest of its life.
+        bootstrapped.current.add(contentId)
+        // The command clears the screen ON THE TARGET (see remote-shell.ts), so
+        // the client only types it. No local erase, no fixed-delay clear: both
+        // were wrong for the same reason — this is an ordering problem, and the
+        // only ordering-aware point is inside the remote shell's own startup.
+        model.write(`${command}\n`)
+      } catch {
+        // A failed bootstrap leaves the shell where it opened: the local
+        // placeholder, exactly as before this feature existed.
+      }
+    })()
+    void run.finally(() => { inFlight.current = false })
+    return () => {
+      // Unmounting (or a new terminal identity) cancels the wait; the in-flight
+      // latch is released so the next mount can try again.
+      finished = true
+      inFlight.current = false
+      controller.abort()
+    }
+  }, [model, contentId, sessionId, scope.cwd])
 
   const newTerminal = useCallback(() => {
     // Writing the generation is what mints the replacement: the memo above

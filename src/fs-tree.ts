@@ -19,8 +19,10 @@
 import { opendir, readdir, stat } from 'node:fs/promises'
 import type { Dir, Dirent } from 'node:fs'
 import { basename, dirname, isAbsolute, resolve, sep } from 'node:path'
+import type { Context } from '@deepseek-ai/cordis'
 import { SidebarError } from './wire.ts'
 import type { ExcludeMatcher } from './exclude-patterns.ts'
+import { listRemoteDirectory, remoteSftp } from './remote-fs.ts'
 
 /** One explorer row. */
 export interface SidebarFsEntry {
@@ -124,13 +126,13 @@ export function invalidateDirectoryCache(path?: string): void {
 const DIRECTORY_CACHE_MAX = 512
 
 /** Read one level through the cache when it is fresh. */
-async function listDirectoryCached(path: string, maxEntries: number, exclude?: ExcludeMatcher, gate?: ProbeGate): Promise<SidebarFsListing> {
+async function listDirectoryCached(path: string, maxEntries: number, exclude?: ExcludeMatcher, gate?: ProbeGate, ctx?: Context): Promise<SidebarFsListing> {
   const key = cacheKey(path, maxEntries, exclude)
   const now = Date.now()
   const hit = directoryCache.get(key)
   // A cached level runs no filesystem probe at all, so it never spends budget.
   if (hit !== undefined && now - hit.at < DIRECTORY_CACHE_TTL_MS) return hit.listing
-  const listing = await readDirectory(path, maxEntries, exclude, gate)
+  const listing = await readDirectory(path, maxEntries, exclude, gate, ctx)
   // Bounded: a deep walk of many directories must not grow this map without
   // limit (entries are tiny, but an unbounded map in a long-lived host is a
   // leak). Map iteration order is insertion order, so the first key is oldest.
@@ -155,12 +157,27 @@ async function listDirectoryCached(path: string, maxEntries: number, exclude?: E
  * @returns the sorted listing.
  * @throws {SidebarError} fs-error when the level is unreadable or not a directory.
  */
-export async function listDirectory(path: string, maxEntries = 1000, exclude?: ExcludeMatcher, gate?: ProbeGate): Promise<SidebarFsListing> {
-  return await listDirectoryCached(path, maxEntries, exclude, gate)
+export async function listDirectory(path: string, maxEntries = 1000, exclude?: ExcludeMatcher, gate?: ProbeGate, ctx?: Context): Promise<SidebarFsListing> {
+  return await listDirectoryCached(path, maxEntries, exclude, gate, ctx)
 }
 
 /** Read one level straight from the filesystem (the cache's slow path). */
-async function readDirectory(path: string, maxEntries: number, exclude?: ExcludeMatcher, gate?: ProbeGate): Promise<SidebarFsListing> {
+async function readDirectory(path: string, maxEntries: number, exclude?: ExcludeMatcher, gate?: ProbeGate, ctx?: Context): Promise<SidebarFsListing> {
+  // SSH-routed workspaces: the cwd is a LOCAL PLACEHOLDER whose bytes live on
+  // the remote host, so `node:fs` would list an empty directory. Serve the level
+  // over SFTP instead. Without dsh-remote-ssh mounted `remoteSftp` returns null
+  // and every path keeps the local behaviour below.
+  if (ctx !== undefined) {
+    const remote = await remoteSftp(ctx, path).catch(() => null)
+    if (remote !== null) {
+      const listed = await listRemoteDirectory(remote.toDisplay, remote.sftp, remote.route.remotePath, maxEntries)
+      const kept = exclude === undefined
+        ? listed.entries
+        : listed.entries.filter(entry => !exclude(entry.path, entry.name))
+      kept.sort(compareEntries)
+      return { path, entries: kept, truncated: listed.truncated }
+    }
+  }
   let dirents
   try {
     // One syscall batch instead of an `opendir` stream: `readdir` with types is

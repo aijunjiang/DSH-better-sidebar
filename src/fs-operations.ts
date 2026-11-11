@@ -28,6 +28,8 @@ import { basename, dirname, join } from 'node:path'
 import { invalidateDirectoryCache, requireAbsolute } from './fs-tree.ts'
 import { ensureWorkspaceWritePath, resolveTarget } from './path-security.ts'
 import { encodeText, fileFormatOf, restoreEol } from './text-encoding.ts'
+import type { Context } from '@deepseek-ai/cordis'
+import { createRemoteFile, mkdirRemoteEntry, parseRemoteRoute, remoteEntryExists, remoteSftp, removeRemote, renameRemote, writeRemoteText, writeRemoteUpload } from './remote-fs.ts'
 import { SidebarError } from './wire.ts'
 
 /**
@@ -53,6 +55,8 @@ export interface WorkspaceUploadInput {
   chunks: AsyncIterable<string | Uint8Array>
   /** @deprecated IGNORED — containment was removed. Do not pass it. */
   fence?: boolean
+  /** Cordis context: when present, an SSH-routed target uploads over SFTP instead of node:fs. */
+  ctx?: Context
 }
 
 /**
@@ -132,7 +136,7 @@ async function renameIntoPlace(from: string, to: string): Promise<void> {
  * always removed on failure.
  */
 export async function writeWorkspaceUpload(input: WorkspaceUploadInput): Promise<{ path: string; size: number }> {
-  const { cwd, dir, relativePath, chunks } = input
+  const { cwd, dir, relativePath, chunks, ctx } = input
   // The shared resolution contract: an absolute `dir` normalizes, a
   // session-relative one joins the cwd, `~` expands against the home (#713).
   const base = resolveTarget(cwd, dir)
@@ -144,6 +148,14 @@ export async function writeWorkspaceUpload(input: WorkspaceUploadInput): Promise
     throw new SidebarError('bad-request', 'relativePath must stay below the upload directory', 400)
   }
   const target = join(base, ...segments)
+  // SSH-routed workspace: bytes belong on the SSH host, not the local
+  // placeholder directory. Stream to a bounded staging file, fastPut over SFTP,
+  // then rename the temp sibling into place atomically.
+  if (ctx !== undefined && parseRemoteRoute(target) !== null) {
+    const written = await writeRemoteUpload(ctx, target, chunks, Number.MAX_SAFE_INTEGER)
+    invalidateDirectoryCache(dirname(target))
+    return written
+  }
   const safeTarget = await ensureWorkspaceWritePath(cwd, target)
   const tmp = join(dirname(safeTarget), `.${basename(safeTarget)}.dsh-upload-${randomUUID()}.tmp`)
   await mkdir(dirname(safeTarget), { recursive: true })
@@ -198,6 +210,8 @@ export interface WorkspaceWriteInput {
    * entry points, `fs.createFile` and the upload writer).
    */
   expectedMtimeMs?: number
+  /** Cordis context: when present, an SSH-routed target saves over SFTP instead of node:fs. */
+  ctx?: Context
 }
 
 /**
@@ -220,9 +234,55 @@ export interface WorkspaceWriteInput {
  *  matches the file OR the file is no longer there at all, fs-error when the
  *  write itself fails.
  */
+/**
+ * One remote file's mtime in milliseconds, or undefined when it is missing.
+ * SFTP reports `mtime` in SECONDS, while the local `node:fs` baseline the
+ * editor carries is in milliseconds; the conversion here keeps the two
+ * fences comparable.
+ * @param ctx - cordis context carrying remote-ssh's `sshRegistry`.
+ * @param path - the placeholder or `ssh://` path naming the remote file.
+ * @returns the remote mtime in ms, or undefined when the file is gone.
+ */
+async function remoteMtimeMs(ctx: Context, path: string): Promise<number | undefined> {
+  try {
+    const resolved = await remoteSftp(ctx, path)
+    if (resolved === null) return undefined
+    const stats = await new Promise<{ mtime: number }>((resolve, reject) => {
+      resolved.sftp.stat(resolved.route.remotePath, (error, value) => {
+        if (error !== null) reject(error)
+        else resolve(value)
+      })
+    })
+    return stats.mtime * 1000
+  } catch {
+    return undefined
+  }
+}
+
 export async function writeWorkspaceText(input: WorkspaceWriteInput): Promise<{ mtimeMs?: number }> {
-  const { cwd, path, content, expectedMtimeMs } = input
+  const { cwd, path, content, expectedMtimeMs, ctx } = input
   const absolute = await ensureWorkspaceWritePath(cwd, path)
+  // SSH-routed workspace: SFTP has no mtime fence of its own, so the baseline
+  // is compared with a remote stat before the write. Saving over a file that
+  // changed remotely is refused exactly like the local path.
+  if (ctx !== undefined && parseRemoteRoute(absolute) !== null) {
+    if (expectedMtimeMs !== undefined) {
+      const remoteMtime = await remoteMtimeMs(ctx, absolute)
+      if (remoteMtime !== expectedMtimeMs) {
+        const why = remoteMtime === undefined
+          ? `no longer exists on the SSH host (expected mtime ${expectedMtimeMs})`
+          : `changed on the SSH host since it was loaded (expected mtime ${expectedMtimeMs}, found ${remoteMtime})`
+        throw new SidebarError('fs-conflict', `"${absolute}" ${why}`, 409)
+      }
+    }
+    try {
+      await writeRemoteText(ctx, absolute, content)
+    } catch (error) {
+      throw new SidebarError('fs-error', `cannot write "${absolute}": ${error instanceof Error ? error.message : String(error)}`, 400)
+    }
+    invalidateDirectoryCache(dirname(absolute))
+    return {}
+  }
   // Detect the byte encoding AND the line ending BEFORE the temp write, so the
   // save round-trips what the file already used.
   const { encoding, eol } = await fileFormatOf(absolute)
@@ -271,6 +331,8 @@ export interface WorkspaceRenameInput {
   name: string
   /** @deprecated IGNORED — containment was removed. Do not pass it. */
   fence?: boolean
+  /** Cordis context: when present, an SSH-routed target is served over SFTP. */
+  ctx?: Context
 }
 
 /**
@@ -360,11 +422,25 @@ async function pathExists(target: string): Promise<boolean> {
  * failures.
  */
 export async function renameWorkspaceEntry(input: WorkspaceRenameInput): Promise<{ path: string }> {
-  const { cwd, path, name } = input
+  const { cwd, path, name, ctx } = input
   assertSingleSegmentName(name)
   const { absolute, realCwd } = resolveEntry(cwd, path)
   if (await isWorkspaceRoot(absolute, realCwd)) {
     throw new SidebarError('fs-error', 'cannot rename the workspace root', 400)
+  }
+  if (ctx !== undefined && parseRemoteRoute(absolute) !== null) {
+    if (basename(absolute) === name) return { path: absolute }
+    const remoteDestination = join(dirname(absolute), name)
+    if (await remoteEntryExists(ctx, remoteDestination)) {
+      throw new SidebarError('fs-error', `"${name}" already exists`, 409)
+    }
+    try {
+      await renameRemote(ctx, absolute, remoteDestination)
+    } catch (error) {
+      throw new SidebarError('fs-error', `cannot rename to "${name}": ${error instanceof Error ? error.message : String(error)}`, 400)
+    }
+    invalidateDirectoryCache(dirname(absolute))
+    return { path: remoteDestination }
   }
   if (basename(absolute) === name) return { path: absolute }
   const destination = join(dirname(absolute), name)
@@ -391,6 +467,8 @@ export interface WorkspaceMkdirInput {
   name: string
   /** @deprecated IGNORED — containment was removed. Do not pass it. */
   fence?: boolean
+  /** Cordis context: when present, an SSH-routed target is served over SFTP. */
+  ctx?: Context
 }
 
 /**
@@ -403,10 +481,22 @@ export interface WorkspaceMkdirInput {
  * @throws SidebarError with a wire code for shape and existence failures.
  */
 export async function mkdirWorkspaceEntry(input: WorkspaceMkdirInput): Promise<{ path: string }> {
-  const { cwd, path, name } = input
+  const { cwd, path, name, ctx } = input
   assertSingleSegmentName(name)
   const { absolute } = resolveEntry(cwd, path)
   const destination = await ensureWorkspaceWritePath(cwd, join(absolute, name))
+  if (ctx !== undefined && parseRemoteRoute(destination) !== null) {
+    if (await remoteEntryExists(ctx, destination)) {
+      throw new SidebarError('fs-error', `"${name}" already exists`, 409)
+    }
+    try {
+      await mkdirRemoteEntry(ctx, destination)
+    } catch (error) {
+      throw new SidebarError('fs-error', `cannot create "${name}": ${error instanceof Error ? error.message : String(error)}`, 400)
+    }
+    invalidateDirectoryCache(dirname(destination))
+    return { path: destination }
+  }
   if (await pathExists(destination)) {
     throw new SidebarError('fs-error', `"${name}" already exists`, 409)
   }
@@ -483,6 +573,8 @@ export interface WorkspaceCreateFileInput {
   name: string
   /** @deprecated IGNORED — containment was removed. Do not pass it. */
   fence?: boolean
+  /** Cordis context: when present, an SSH-routed target is served over SFTP. */
+  ctx?: Context
 }
 
 /**
@@ -499,10 +591,22 @@ export interface WorkspaceCreateFileInput {
  * failures.
  */
 export async function createWorkspaceFile(input: WorkspaceCreateFileInput): Promise<{ path: string }> {
-  const { cwd, path, name } = input
+  const { cwd, path, name, ctx } = input
   assertCreatableFileName(name)
   const { absolute } = await resolveEntry(cwd, path)
   const destination = await ensureWorkspaceWritePath(cwd, join(absolute, name))
+  if (ctx !== undefined && parseRemoteRoute(destination) !== null) {
+    try {
+      await createRemoteFile(ctx, destination)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new SidebarError('fs-error', `"${name}" already exists`, 409)
+      }
+      throw new SidebarError('fs-error', `cannot create "${name}": ${error instanceof Error ? error.message : String(error)}`, 400)
+    }
+    invalidateDirectoryCache(dirname(destination))
+    return { path: destination }
+  }
   if (await pathExists(destination)) {
     throw new SidebarError('fs-error', `"${name}" already exists`, 409)
   }
@@ -527,6 +631,8 @@ export interface WorkspaceRemoveInput {
   path: string
   /** @deprecated IGNORED — containment was removed. Do not pass it. */
   fence?: boolean
+  /** Cordis context: when present, an SSH-routed target is served over SFTP. */
+  ctx?: Context
 }
 
 /**
@@ -538,8 +644,22 @@ export interface WorkspaceRemoveInput {
  * @throws SidebarError with a wire code for existence and root failures.
  */
 export async function removeWorkspaceEntry(input: WorkspaceRemoveInput): Promise<{ path: string }> {
-  const { cwd, path } = input
+  const { cwd, path, ctx } = input
   const { absolute, realCwd } = resolveEntry(cwd, path)
+  // SSH-routed workspace: the bytes live on the SSH host, so the local rm/lstat
+  // would fail with ENOENT on a path that only exists remotely.
+  if (ctx !== undefined && parseRemoteRoute(absolute) !== null) {
+    if (await isWorkspaceRoot(absolute, realCwd)) {
+      throw new SidebarError('fs-error', 'cannot remove the workspace root', 400)
+    }
+    try {
+      await removeRemote(ctx, absolute)
+    } catch (error) {
+      throw new SidebarError('fs-error', `cannot remove "${path}": ${error instanceof Error ? error.message : String(error)}`, 400)
+    }
+    invalidateDirectoryCache(dirname(absolute))
+    return { path: absolute }
+  }
   if (await isWorkspaceRoot(absolute, realCwd)) {
     throw new SidebarError('fs-error', 'cannot remove the workspace root', 400)
   }

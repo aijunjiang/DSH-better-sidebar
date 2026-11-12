@@ -92,15 +92,13 @@ async function readConnections(): Promise<SavedConnection[]> {
  * @returns an existing private key path, or undefined when none is available.
  */
 async function resolveIdentity(identityPath: string): Promise<string | undefined> {
-  const home = process.env.DSH_HOME ?? join(homedir(), '.dsh')
-  // A profile that moved $DSH_HOME still shares the machine's credentialed
-  // identity directory, so both are searched: the active deployment's first,
-  // then the user's default harness home.
-  const roots = home === join(homedir(), '.dsh') ? [home] : [home, join(homedir(), '.dsh')]
-  const candidates = [
-    ...(identityPath === '' ? [] : [identityPath]),
-    ...roots.flatMap(root => [join(root, 'remote-ssh', 'id_ed25519'), join(root, 'remote-ssh', 'id_rsa')]),
-  ]
+  // ONLY the connection's own declared key. A harness-provisioned key is not a
+  // substitute for the connection's chosen auth: most connections here are
+  // password-only, and silently handing them the machine's identity would make
+  // the terminal fail to log in on a host that key was never deployed to. The
+  // caller decides which of the two applies; this function only answers "does
+  // the connection name a usable private key".
+  const candidates = identityPath === '' ? [] : [identityPath]
   for (const candidate of candidates) {
     try {
       const key = await readFile(candidate, 'utf8')
@@ -162,7 +160,12 @@ export async function buildRemoteShellBootstrap(cwd: string): Promise<RemoteShel
   const identityPath = await resolveIdentity(connection?.identityPath ?? '')
   const password = connection?.password ?? ''
   let command: string
-  if (identityPath !== undefined) {
+  // Order follows the CONNECTION's own auth, not a preference for keys.
+  // A record that carries a password authenticates with that password; the
+  // harness identity is never substituted, because it is provisioned per
+  // connection and a key that host has never seen fails the login outright.
+  if (password === '' && identityPath !== undefined) {
+    // No password recorded: the connection authenticates with its own key.
     command = ['ssh', ...sshArgs, '-i', shellQuote(identityPath), target, shellQuote(remoteCommand)].join(' ')
   } else if (password !== '') {
     // SECURITY: the terminal echoes everything written to it, so a password in

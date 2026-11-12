@@ -148,7 +148,18 @@ export async function buildRemoteShellBootstrap(cwd: string): Promise<RemoteShel
   // client) either misses the echo or wipes the remote prompt too. Clearing on
   // the remote side lands the wipe between those two events, so the shell's own
   // prompt is painted after it and survives.
-  const remoteCommand = `clear; cd ${shellQuote(remotePath)}; exec "$SHELL" -l`
+  //
+  // `stty echo` is NOT decoration. The remote PTY is allocated by `ssh -t`
+  // from the state the LOCAL terminal was in when the line ran, and the
+  // `clear` above writes escape sequences that a remote terminfo pointing at
+  // an unfamiliar `$TERM` can interpret as terminal-mode changes. On a real
+  // deployment the observable result was a shell whose prompt appeared but
+  // whose keystrokes were never echoed — typing did nothing visible while the
+  // commands themselves ran (`stty echo` typed blind restored it). Forcing
+  // echo right before the interactive shell takes over makes the takeover
+  // independent of whatever mode the PTY was left in. `2>/dev/null` keeps a
+  // target without `stty`/`clear` from aborting the rest of the line.
+  const remoteCommand = `clear 2>/dev/null; cd ${shellQuote(remotePath)}; stty echo 2>/dev/null; exec "$SHELL" -l`
 
   const sshArgs = [
     '-t',

@@ -106,10 +106,20 @@ describe('subagents.catalog route', () => {
     expect(close).toHaveBeenCalled()
   })
 
-  it('answers an empty catalog for a session that cannot be read', async () => {
+  it('fails loudly for a session whose log cannot be read', async () => {
+    // An empty catalog would claim "this parent spawned nothing" and hide the
+    // children this route exists to recover.
     const open = vi.fn(async () => { throw new Error('missing') })
     const api = buildCatalogApi(ctxWith({ get: () => undefined }, { open }))
-    await expect(api.subagentsCatalog({ sessionId: 'gone' })).resolves.toEqual({ entries: [] })
+    await expect(api.subagentsCatalog({ sessionId: 'gone' })).rejects.toThrowError(
+      expect.objectContaining<Partial<SidebarError>>({
+        code: 'subagents-unavailable',
+        status: 503,
+        // The host's own diagnostic is carried, not swallowed: a bare
+        // "unreadable" left the real cause invisible while debugging.
+        message: expect.stringContaining('missing'),
+      }),
+    )
   })
 
   it('degrades to a 503 when a cold read has no persistence service', async () => {

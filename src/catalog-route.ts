@@ -21,12 +21,12 @@
  *
  * Degradation contract:
  * - `sessionPersistence` absent → 503 (this route cannot read a cold log).
- * - An unreadable log (missing / corrupt) → the row with an empty catalog:
- *   the page keeps its snapshot view instead of an error banner, because an
- *   empty answer is indistinguishable from "no subagents here" downstream.
+ * - An unreadable log (missing / corrupt) → 503: an empty answer would read
+ *   as "this parent spawned nothing" and hide the very rows this route
+ *   exists to recover. The client keeps its snapshot view either way.
  */
 import type { Context, SidebarSubagentCatalogEntry } from './context-types.ts'
-import { readPersistedSessionOf } from './session-store.ts'
+import { readPersistedSession } from './session-store.ts'
 import { requireString, SidebarError } from './wire.ts'
 
 /** The catalog routes of the /sidebar JSON API. */
@@ -116,15 +116,28 @@ export function buildCatalogApi(ctx: Context): SidebarCatalogRoutes {
         }[]
         return { entries: catalogEntriesOf(events, 0) }
       }
-      if (ctx.get('sessionPersistence') === undefined) {
+      const persistence = ctx.get('sessionPersistence')
+      if (persistence === undefined) {
         throw new SidebarError(
           'subagents-unavailable',
           'reading a cold catalog requires the sessionPersistence service',
           503,
         )
       }
-      const persisted = await readPersistedSessionOf(ctx, sessionId)
-      if (persisted === undefined) return { entries: [] }
+      let persisted
+      try {
+        persisted = await readPersistedSession(persistence, sessionId)
+      } catch (error) {
+        throw new SidebarError(
+          'subagents-unavailable',
+          `cannot read the session log of "${sessionId}": ${error instanceof Error ? error.message : String(error)}`,
+          503,
+        )
+      }
+      // EMPTY means "this parent spawned nothing"; UNREADABLE means "could not
+      // tell" and is reported above — collapsing the two silently hid every
+      // child of a parent whose log the host could not open, which is exactly
+      // the state this route exists to fix.
       return { entries: catalogEntriesOf(persisted.events, persisted.inheritedEventCount) }
     },
   }

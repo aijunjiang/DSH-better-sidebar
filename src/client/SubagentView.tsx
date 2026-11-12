@@ -41,13 +41,14 @@ import type {
   SidebarChildLiveView,
   SidebarSessionList,
   SidebarSubagentAddress,
+  SidebarSubagentCatalogEntry,
 } from '../context-types.ts'
 import {
   countSubagentDescendants,
   isSideThreadSummary,
   rootAncestor,
 } from './subagent-detect.ts'
-import { subagentCatalogs } from './subagent-catalog.ts'
+import { mergeFreshCatalogs, subagentCatalogs } from './subagent-catalog.ts'
 import { sessionMetrics } from './session-metrics.ts'
 import { hasTranscriptAside, openTranscriptAside } from './subagent-chat.ts'
 import { teamMembersOf, teamProjectionOf } from './team-projection.ts'
@@ -85,6 +86,8 @@ const TELEMETRY_POLL_MS = 5000
  *  nothing (or a poll that returns nothing) never re-renders the page. */
 const NO_LIVE: Readonly<Record<string, SidebarChildLiveView>> = {}
 const NO_RUNS: readonly WorkflowRunView[] = []
+/** The empty fresh-catalog map: one identity for the same reason as NO_LIVE. */
+const EMPTY_FRESH: Readonly<Record<string, readonly SidebarSubagentCatalogEntry[]>> = {}
 
 /**
  * Whether two activity summaries say the same thing. Every field the cards
@@ -213,6 +216,82 @@ function useSubagentLive(
   return live
 }
 
+/**
+ * Catalogs re-read from the HOST for parents the projection snapshot cannot
+ * be trusted for.
+ *
+ * The snapshot is complete for every child that existed when the connection
+ * read its projections. It is NOT complete for a child spawned afterwards:
+ * DSH loads each session's projections once per connection and
+ * `refreshProjections` returns early on a `ready` session, so the parent's
+ * newly appended `subagent/catalog` row never reaches this client — and a
+ * topology that renders children therefore never sees the subagent the user
+ * is waiting on. The host route folds the same durable rows off the parent's
+ * log (see src/catalog-route.ts), so this hook is a freshness overlay, not a
+ * second model: a snapshot row always wins, and an overlay row only adds a
+ * child the snapshot has not learned about YET.
+ *
+ * Only parents in the SELECTED tree are asked (the root plus every branch the
+ * topology draws), so the cost is one cheap host read per drawn parent, not
+ * one per session in the list.
+ */
+function useFreshCatalogs(
+  watchedKey: string,
+  active: boolean,
+): Readonly<Record<string, readonly SidebarSubagentCatalogEntry[]>> {
+  const [fresh, setFresh] = useState<Readonly<Record<string, readonly SidebarSubagentCatalogEntry[]>>>(EMPTY_FRESH)
+
+  const watched = useMemo(() => (watchedKey === '' ? [] : watchedKey.split('\u0000')), [watchedKey])
+
+  const poll = useCallback(async (signal: AbortSignal): Promise<void> => {
+    // One parent per tick, rotating: the map only grows (a child never
+    // un-catalogs), so a full sweep does not have to repeat every 3 s, and a
+    // wide tree must not fire N requests at once.
+    for (const parentSessionId of watched) {
+      if (signal.aborted) return
+      try {
+        const result = await api.subagentsCatalog(parentSessionId, signal)
+        if (signal.aborted) return
+        setFresh(current => {
+          const previous = current[parentSessionId]
+          if (previous !== undefined && sameCatalogRows(previous, result.entries)) return current
+          return { ...current, [parentSessionId]: result.entries }
+        })
+      } catch {
+        // One unreadable parent keeps its snapshot view; the next sweep
+        // retries it. A closed or never-persisted session is the common case.
+      }
+    }
+  }, [watched])
+  usePolling(active && watched.length > 0, poll, {
+    intervalMs: POLL_MS,
+    mode: 'self-scheduling',
+    immediate: true,
+  })
+
+  // A tree switch must not carry another tree's rows.
+  useEffect(() => {
+    setFresh(current => (Object.keys(current).length === 0 ? current : EMPTY_FRESH))
+  }, [watched])
+
+  return fresh
+}
+
+/** Stable-identity compare of two catalog row lists (id + mode + label). */
+function sameCatalogRows(
+  a: readonly SidebarSubagentCatalogEntry[],
+  b: readonly SidebarSubagentCatalogEntry[],
+): boolean {
+  if (a.length !== b.length) return false
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index]
+    const right = b[index]
+    if (left === undefined || right === undefined) return false
+    if (left.id !== right.id || left.mode !== right.mode || left.label !== right.label) return false
+  }
+  return true
+}
+
 /** The folded workflow runs of the tree (poll-driven; empty when none). */
 function useWorkflowRuns(rootId: string | undefined, active: boolean): readonly WorkflowRunView[] {
   const [runs, setRuns] = useState<readonly WorkflowRunView[]>(NO_RUNS)
@@ -308,7 +387,10 @@ export function SubagentView(props: {
   const byId = list.byId
   // The projected per-parent catalogs, already folded into the view shape the
   // topology consumes (see subagent-catalog.ts).
-  const catalogs = useMemo(() => subagentCatalogs(list.projectionsBySession), [list.projectionsBySession])
+  const snapshotCatalogs = useMemo(
+    () => subagentCatalogs(list.projectionsBySession),
+    [list.projectionsBySession],
+  )
   // Token usage and turn timing ride the same snapshot: the popover's two
   // extra facts are read here, not fetched (see ./session-metrics.ts).
   const metrics = useMemo(() => sessionMetrics(list.projectionsBySession), [list.projectionsBySession])
@@ -317,6 +399,21 @@ export function SubagentView(props: {
   const rootId = useMemo(() => rootAncestor(byId, sessionId), [byId, sessionId])
   const rootSummary = rootId === undefined ? undefined : byId[rootId]
   const live = useSubagentLive(rootId, active)
+  /**
+   * Which parents the freshness overlay asks the host about: the root plus
+   * every branch the topology draws (the same lineage walk the jobs panel
+   * uses). A parent outside this tree is never asked.
+   */
+  const watchedKey = useMemo(() => {
+    if (rootId === undefined) return ''
+    return [...treeSessionIds(byId, rootId)].sort().join('\u0000')
+  }, [byId, rootId])
+  const fresh = useFreshCatalogs(watchedKey, active)
+  /** The snapshot folded with the host re-reads (see useFreshCatalogs). */
+  const catalogs = useMemo(
+    () => mergeFreshCatalogs(snapshotCatalogs, fresh),
+    [snapshotCatalogs, fresh],
+  )
   const runs = useWorkflowRuns(rootId, active)
   // The root-led team, straight off the SAME snapshot the catalogs come from
   // (see team-projection.ts): undefined = no team here (no experimental layer,

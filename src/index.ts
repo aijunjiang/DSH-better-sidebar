@@ -43,6 +43,7 @@ import { gitGraph, gitHistory, type GitGraphOptions, type GitHistoryOptions } fr
 import { SettingsConflictError } from '@deepseek-ai/dsh-settings'
 import { AgentOpenRegistry, registerOpenTool, type AgentOpenRequest } from './agent-opens.ts'
 import { buildSubagentLiveApi, type SidebarSubagentLiveRoutes } from './subagent-live-route.ts'
+import { buildCatalogApi, type SidebarCatalogRoutes } from './catalog-route.ts'
 import { buildTeamsApi, type SidebarTeamsRoutes } from './team-routes.ts'
 import { buildWorkflowsApi, type SidebarWorkflowRoutes } from './workflow-routes.ts'
 import { buildSidechatApi } from './sidechat-routes.ts'
@@ -793,6 +794,7 @@ function buildApi(
   // `subagents.history` calls. The route degrades to a 503 when the host
   // subagent runtime is absent (the page has no topology to show anyway).
   const subagentLiveApi: SidebarSubagentLiveRoutes = buildSubagentLiveApi(ctx)
+  const catalogApi: SidebarCatalogRoutes = buildCatalogApi(ctx)
   const changesOps = createChangesOpsApi(ctx)
   // Workflow runs: no service registry exists in DSH (runs are
   // holder-owned), so the route folds the `tool-workflow/*` session events
@@ -1225,6 +1227,11 @@ function buildApi(
     // Subagent live previews: one batch request per refresh; the route folds
     // the newest text/tool activity of every running child in the tree.
     'subagents.live': (payload) => subagentLiveApi.live(payload),
+    // Direct-child catalogs read from the HOST's durable log: the client's
+    // projection snapshot only knows the children that existed when its
+    // connection loaded, and DSH never re-reads a ready session — a child
+    // spawned by a running agent would never appear (see catalog-route.ts).
+    'subagents.catalog': (payload) => catalogApi.subagentsCatalog(payload),
     // Workflow runs of the whole tree (folded from `tool-workflow/*`
     // session events; empty list when the tree never ran one).
     'workflows.list': (payload) => workflowsApi.list(payload),

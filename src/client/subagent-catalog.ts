@@ -105,3 +105,55 @@ export function childLive(
 ): SidebarChildLiveView | undefined {
   return live[childSessionId]
 }
+
+/**
+ * Fold the host's re-read catalogs into the snapshot's views — the freshness
+ * overlay of {@link subagentCatalogs}.
+ *
+ * The snapshot always wins for a row it carries (it is the projection the
+ * host itself would serve); a re-read only contributes:
+ *
+ * - rows the snapshot does not have yet — the child a running agent spawned
+ *   AFTER the connection loaded its projections, which DSH never re-reads
+ *   because `refreshProjections` returns early on a `ready` session;
+ * - a catalog that arrives at all for a parent the snapshot holds no view
+ *   for, reported as `ready` because the host did answer it.
+ *
+ * A parent whose snapshot view is `error` keeps that error: a stale snapshot
+ * read must not be papered over with a partial host answer.
+ *
+ * Equal content keeps the PREVIOUS view objects: the topology re-derives on
+ * every new catalog identity, and the re-read returns fresh objects each
+ * sweep.
+ *
+ * @param snapshot - the views folded from `projectionsBySession`.
+ * @param fresh - the host re-reads (`parent id → its direct-child rows`).
+ * @returns the views the topology consumes.
+ */
+export function mergeFreshCatalogs(
+  snapshot: Readonly<Record<string, SubagentCatalogView | undefined>>,
+  fresh: Readonly<Record<string, readonly SidebarSubagentCatalogEntry[] | undefined>>,
+): Readonly<Record<string, SubagentCatalogView>> {
+  const merged: Record<string, SubagentCatalogView> = {}
+  for (const [parentId, view] of Object.entries(snapshot)) {
+    if (view !== undefined) merged[parentId] = view
+  }
+  for (const [parentId, rows] of Object.entries(fresh)) {
+    if (rows === undefined) continue
+    const current = merged[parentId]
+    if (current === undefined) {
+      merged[parentId] = { entries: rows, state: 'ready', error: null }
+      continue
+    }
+    if (current.state === 'error') continue
+    const known = new Set(current.entries.map(entry => entry.id))
+    const added = rows.filter(row => !known.has(row.id))
+    if (added.length === 0) continue
+    merged[parentId] = {
+      entries: [...current.entries, ...added],
+      state: current.state,
+      error: current.error,
+    }
+  }
+  return merged
+}

@@ -28,6 +28,15 @@ import { foldSurface, isSurfaceEligibleType } from '@deepseek-ai/dsh-session/sur
 /** The durable thread-label prefix (also the row filter in the client list). */
 export const SIDE_LABEL_PREFIX = 'Side: '
 
+/**
+ * The value of a Side Chat thread's `subagent/descriptor.provider`. It is the
+ * AUTHORITATIVE marker of a thread: unlike the `Side: ` title prefix (a
+ * display name) or the catalog `label` (the creation label), it is stamped
+ * by this plugin's own creation path and cannot be produced by an ordinary
+ * subagent's model-authored label.
+ */
+export const SIDECHAT_DESCRIPTOR_PROVIDER = 'sidechat'
+
 /** The pinned label of a freshly created thread that no prompt has reached
  *  yet (Codex-style immediate create: the tab opens an EMPTY thread, the
  *  first composer message carries the boundary and earns the real label).

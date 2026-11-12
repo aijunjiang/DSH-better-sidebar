@@ -23,6 +23,7 @@ import type {
   SidebarCreateTeamTaskRequest,
   SidebarChildLiveView,
   SidebarSessionEvent,
+  SidebarSubagentCatalogEntry,
   SidebarTeamTaskView,
   SidebarUpdateTeamTaskRequest,
 } from '../context-types.ts'
@@ -590,6 +591,20 @@ export const api = {
    */
   subagentsLive: (rootSessionId: string, signal?: AbortSignal) =>
     call<SubagentLiveResult>('subagents.live', { rootSessionId }, signal),
+  /**
+   * One parent's direct-child catalog read from the HOST's durable log. The
+   * client's projection snapshot is the fast path, but it only carries the
+   * children that existed when the connection loaded its projections (DSH
+   * never re-reads a `ready` session), so a child spawned by a running agent
+   * is only visible through this route. `sessionId` is the PARENT whose
+   * catalog is wanted, not a session scope.
+   */
+  subagentsCatalog: (sessionId: string, signal?: AbortSignal) =>
+    call<{ entries: readonly SidebarSubagentCatalogEntry[] }>(
+      'subagents.catalog',
+      { sessionId },
+      signal,
+    ),
   /**
    * The workflow runs of the whole tree, folded host-side from the
    * `tool-workflow/*` session events (the same four types the official

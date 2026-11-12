@@ -68,14 +68,30 @@ describe('buildRemoteShellBootstrap', () => {
     expect(bootstrap!.command).toContain('stty echo 2>/dev/null; exec')
   })
 
-  it('uses the identity branch when a key exists, with the same echo guard', async () => {
-    await withConnection({}, '-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----')
+  it('uses the connection\'s own key when it names one and stores no password', async () => {
+    // The connection declares its key: that key is used, and the echo guard
+    // travels with it.
+    // The key must EXIST: resolveIdentity only answers with a readable PEM.
+    const ownKey = join(home, 'own_ed25519')
+    await writeFile(ownKey, '-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----', 'utf8')
+    await withConnection({ identityPath: ownKey })
     const { buildRemoteShellBootstrap } = await import('../src/remote-shell.ts')
     const bootstrap = await buildRemoteShellBootstrap(routeCwd('/srv/app'))
-    expect(bootstrap!.command).toMatch(/^ssh .*-i '.*id_ed25519'/)
-    expect(bootstrap!.command).toContain('stty echo 2>/dev/null; exec')
-    // The password path must NOT be involved when a key was found.
+    // The harness key is NOT substituted for the connection's chosen auth.
+    expect(bootstrap!.command).toContain(`-i '${ownKey}'`)
     expect(bootstrap!.command).not.toContain('sshpass')
+    expect(bootstrap!.command).toContain('stty echo 2>/dev/null; exec')
+  })
+
+  it('prefers the stored password over any key the harness happens to have', async () => {
+    // A harness-provisioned key under <dsh home>/remote-ssh must never be used
+    // as a substitute: eleven of the saved connections here are password-only,
+    // and a key the target has never seen fails the login outright.
+    await withConnection({ password: 'pw' }, '-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----')
+    const { buildRemoteShellBootstrap } = await import('../src/remote-shell.ts')
+    const bootstrap = await buildRemoteShellBootstrap(routeCwd('/srv/app'))
+    expect(bootstrap!.command).toContain('sshpass -d 3 ssh')
+    expect(bootstrap!.command).not.toMatch(/-i '.*id_ed25519'/)
   })
 
   it('answers null for a workspace that is not on an SSH route', async () => {

@@ -23,6 +23,7 @@ import {
   changesTabIcon, filesTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon,
 } from './tab-icons.tsx'
 import { t } from '../locales.ts'
+import { newClientId } from '../random-id.ts'
 import { openSidebarFile } from '../sidebar-file.ts'
 import { EditorHost } from '../EditorHost.tsx'
 import { OpenWithSettings } from '../open-with-settings.tsx'
@@ -265,7 +266,7 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
         }
         return {
           tab: {
-            id: `sidechat:new-${crypto.randomUUID()}`,
+            id: `sidechat:new-${newClientId()}`,
             type: 'sidechat',
             title: t('sideChatUntitled'),
             meta: { autoCreate: true },
@@ -311,10 +312,10 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
       // host binding by instance+run).
       createTab: () => ({
         tab: {
-          id: `terminal-bottom:${crypto.randomUUID()}`,
+          id: `terminal-bottom:${newClientId()}`,
           type: 'terminal-bottom',
           title: t('terminal'),
-          meta: { [INSTANCE_FIELD]: crypto.randomUUID() },
+          meta: { [INSTANCE_FIELD]: newClientId() },
         },
       }),
       // The service is probed, never injected (it is absent on deployments

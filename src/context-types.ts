@@ -438,8 +438,17 @@ export interface SidebarTeamMemberProjection {
  * rejected Team record when the board had to stop at its last valid state.
  */
 export interface SidebarTeamProjection {
-  members: readonly SidebarTeamMemberProjection[]
-  tasks: readonly SidebarTeamTaskView[]
+  /**
+   * The Lead's roster. OPTIONAL in practice: the host publishes
+   * `{ enabled: false, tasks: [] }` for a session that leads no team, so a
+   * reader must treat a missing list as empty rather than map over it (the
+   * unguarded read crashed the whole Tasks page with "Cannot read properties
+   * of undefined (reading 'map')").
+   */
+  members?: readonly SidebarTeamMemberProjection[]
+  tasks?: readonly SidebarTeamTaskView[]
+  /** Whether the experimental team layer is on for this Lead at all. */
+  enabled?: boolean
   failure?: string
 }
 

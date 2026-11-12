@@ -99,7 +99,10 @@ export function teamMembersOf(
   byId: Readonly<Record<string, SidebarSessionSummary | undefined>>,
 ): TeamMemberRow[] {
   if (team === undefined) return []
-  return team.members.map(member => ({
+  // The host publishes `{ enabled: false, tasks: [] }` for a session that
+  // leads no team: `members` is simply absent there, and mapping it crashed
+  // the page (see SidebarTeamProjection).
+  return (team.members ?? []).map(member => ({
     id: member.id,
     name: member.name,
     role: member.role,

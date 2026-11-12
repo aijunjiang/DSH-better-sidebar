@@ -133,3 +133,27 @@ describe('teamMembersOf', () => {
     expect(teamMembersOf(team(), live, {})[0]?.status).toBe('idle')
   })
 })
+
+describe('a team projection without a roster', () => {
+  // DSH 0.2.2 publishes `{ enabled: false, tasks: [] }` for a session that
+  // leads no team: `members` is ABSENT, not empty. Reading it unguarded threw
+  // "Cannot read properties of undefined (reading 'map')" out of
+  // `teamMembersOf` and the Tasks page's error boundary swallowed the entire
+  // panel (the user saw "dsh-better-sidebar: Cannot read properties of
+  // undefined (reading 'map')" instead of the task graph).
+  const noRoster = { enabled: false, tasks: [] } as unknown as SidebarTeamProjection
+
+  it('reports no member rows instead of throwing', () => {
+    expect(teamMembersOf(noRoster, {}, {})).toEqual([])
+  })
+
+  it('survives the exact host shape through the snapshot adapter', () => {
+    const map = projections('root', noRoster)
+    expect(teamMembersOf(teamProjectionOf(map, 'root'), {}, {})).toEqual([])
+  })
+
+  it('still reports the roster when one is present alongside enabled=false', () => {
+    const mixed = { enabled: true, members: [member({ id: 'a' })], tasks: [] } as SidebarTeamProjection
+    expect(teamMembersOf(mixed, {}, {}).map(row => row.id)).toEqual(['a'])
+  })
+})

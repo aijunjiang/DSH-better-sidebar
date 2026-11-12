@@ -747,7 +747,7 @@ export function SubagentView(props: {
       if (team === undefined || rootId === undefined) return null
       const task = popover.taskId === undefined
         ? undefined
-        : team.tasks.find(candidate => candidate.id === popover.taskId)
+        : (team.tasks ?? []).find(candidate => candidate.id === popover.taskId)
       // A task that vanished (deleted elsewhere) closes the window instead of
       // showing a stale card.
       if (popover.taskId !== undefined && task === undefined) return null
@@ -844,7 +844,7 @@ export function SubagentView(props: {
         <TeamBoard
           rootId={rootId}
           members={teamMembers}
-          tasks={team.tasks}
+          tasks={team.tasks ?? []}
           onOpenTask={openTaskFromBoard}
           collapsed={teamBoardCollapsed}
           onToggleCollapsed={() => { setTeamBoardCollapsed(current => !current) }}
